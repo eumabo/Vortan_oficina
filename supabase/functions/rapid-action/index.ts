@@ -1,4 +1,4 @@
-import { Hono } from "npm:hono";
+﻿import { Hono } from "npm:hono";
 import { cors } from "npm:hono/cors";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
@@ -17,15 +17,26 @@ if (Deno.env.get("VORTAN_DEBUG_REQUESTS") === "true") {
 app.use(
   "*",
   cors({
-    origin: [
-      "http://localhost:5173",
-      "https://autoflowoficina.online",
-      "https://www.autoflowoficina.online",
-      "https://vortanoficina.com.br",
-      "https://www.vortanoficina.com.br",
-    ],
+    origin: (origin) => {
+      const allowedOrigins = [
+        "http://localhost:5173",
+        "https://autoflowoficina.online",
+        "https://www.autoflowoficina.online",
+        "https://vortanoficina.com.br",
+        "https://www.vortanoficina.com.br",
+        "https://autoflow-saas-two.vercel.app",
+      ];
+
+      if (allowedOrigins.includes(origin)) return origin;
+
+      if (/^https:\/\/autoflow-saas-[a-z0-9-]+\.vercel\.app$/.test(origin)) {
+        return origin;
+      }
+
+      return "";
+    },
     allowHeaders: ["authorization", "x-client-info", "apikey", "content-type"],
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   }),
 );
 
@@ -99,7 +110,7 @@ function checkRateLimit(c: any) {
 
   if (bucket.count > limit) {
     c.header("Retry-After", String(Math.max(1, Math.ceil((bucket.resetAt - now) / 1000))));
-    return c.json({ error: "Muitas requisições. Tente novamente em instantes." }, 429);
+    return c.json({ error: "Muitas requisiÃ§Ãµes. Tente novamente em instantes." }, 429);
   }
   return null;
 }
@@ -110,7 +121,7 @@ app.use("*", async (c, next) => {
   await next();
 });
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function svc() {
   return createClient(
@@ -140,21 +151,21 @@ const serverError = (c: any, internal: unknown, publicMessage = "Erro interno do
 async function readJsonObject(c: any, maxBytes = 64 * 1024) {
   const declaredLength = Number(c.req.header("content-length") ?? "0");
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    return { body: null, response: c.json({ error: "Requisição muito grande" }, 413) };
+    return { body: null, response: c.json({ error: "RequisiÃ§Ã£o muito grande" }, 413) };
   }
 
   try {
     const body = await c.req.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return { body: null, response: badRequest(c, "JSON inválido") };
+      return { body: null, response: badRequest(c, "JSON invÃ¡lido") };
     }
     const size = new TextEncoder().encode(JSON.stringify(body)).byteLength;
     if (size > maxBytes) {
-      return { body: null, response: c.json({ error: "Requisição muito grande" }, 413) };
+      return { body: null, response: c.json({ error: "RequisiÃ§Ã£o muito grande" }, 413) };
     }
     return { body, response: null };
   } catch {
-    return { body: null, response: badRequest(c, "JSON inválido") };
+    return { body: null, response: badRequest(c, "JSON invÃ¡lido") };
   }
 }
 
@@ -252,7 +263,7 @@ async function requireAdmin(c: any) {
   return { user, response: null };
 }
 
-// ─── Admin ───────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Admin â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 app.get(`${P}/admin/workshops`, async (c) => {
   const admin = await requireAdmin(c);
@@ -304,7 +315,7 @@ app.post(`${P}/admin/workshops/:id/subscription`, async (c) => {
   if (admin.response) return admin.response;
 
   const targetId = c.req.param("id");
-  if (!isUuid(targetId)) return badRequest(c, "Oficina inválida");
+  if (!isUuid(targetId)) return badRequest(c, "Oficina invÃ¡lida");
   const parsed = await readJsonObject(c, 8 * 1024);
   if (parsed.response) return parsed.response;
   const body = parsed.body;
@@ -317,7 +328,7 @@ app.post(`${P}/admin/workshops/:id/subscription`, async (c) => {
     .maybeSingle();
 
   if (targetError) return serverError(c, targetError);
-  if (!targetProfile) return c.json({ error: "Oficina não encontrada" }, 404);
+  if (!targetProfile) return c.json({ error: "Oficina nÃ£o encontrada" }, 404);
 
   const now = new Date();
   let status: "active" | "trial" | "expired";
@@ -352,7 +363,7 @@ app.post(`${P}/admin/workshops/:id/subscription`, async (c) => {
       cancel_at_period_end: false,
     };
   } else {
-    return badRequest(c, "Ação administrativa inválida");
+    return badRequest(c, "AÃ§Ã£o administrativa invÃ¡lida");
   }
 
   try {
@@ -375,18 +386,18 @@ app.post(`${P}/admin/workshops/:id/subscription`, async (c) => {
     .maybeSingle();
 
   if (error) return serverError(c, error);
-  if (!data) return c.json({ error: "Oficina não encontrada" }, 404);
+  if (!data) return c.json({ error: "Oficina nÃ£o encontrada" }, 404);
 
   return c.json(data);
 });
 
-// ─── Health ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Health â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 app.get(`${P}/health`, (c) =>
   c.json({ status: "ok", ts: new Date().toISOString() }),
 );
 
-// ─── Profile ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Profile â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 app.get(`${P}/profile`, async (c) => {
   const user = await getUser(c.req.header("Authorization"));
@@ -418,9 +429,9 @@ app.post(`${P}/profile`, async (c) => {
   const state = textValue(body.state, 40);
   const logoUrl = textValue(body.logo_url, 4096);
 
-  if (!workshopName) return badRequest(c, "Nome da oficina é obrigatório");
+  if (!workshopName) return badRequest(c, "Nome da oficina Ã© obrigatÃ³rio");
   if ([ownerName, phone, whatsapp, instagram, address, city, state, logoUrl].some((v) => v === null)) {
-    return badRequest(c, "Dados do perfil inválidos ou muito longos");
+    return badRequest(c, "Dados do perfil invÃ¡lidos ou muito longos");
   }
 
   const { error } = await svc()
@@ -446,8 +457,8 @@ app.post(`${P}/profile`, async (c) => {
       email: user.email,
     });
   } catch (trialError) {
-    console.error("Erro ao criar teste grátis:", trialError);
-    return serverError(c, "Erro ao ativar teste grátis");
+    console.error("Erro ao criar teste grÃ¡tis:", trialError);
+    return serverError(c, "Erro ao ativar teste grÃ¡tis");
   }
 
   const { data: updatedProfile, error: profileError } = await svc()
@@ -461,7 +472,7 @@ app.post(`${P}/profile`, async (c) => {
   return c.json(updatedProfile);
 });
 
-// ─── Clients ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Clients â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 app.get(`${P}/clients`, async (c) => {
   const user = await getUser(c.req.header("Authorization"));
@@ -490,8 +501,8 @@ app.post(`${P}/clients`, async (c) => {
   const name = textValue(body.name, 160);
   const phone = textValue(body.phone, 40);
   const whatsapp = textValue(body.whatsapp, 40);
-  if (!name) return badRequest(c, "Nome é obrigatório");
-  if (phone === null || whatsapp === null) return badRequest(c, "Contato inválido ou muito longo");
+  if (!name) return badRequest(c, "Nome Ã© obrigatÃ³rio");
+  if (phone === null || whatsapp === null) return badRequest(c, "Contato invÃ¡lido ou muito longo");
   const { data, error } = await svc()
     .from("af_clients")
     .insert({
@@ -513,15 +524,15 @@ app.put(`${P}/clients/:id`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "Cliente inválido");
+  if (!isUuid(id)) return badRequest(c, "Cliente invÃ¡lido");
   const parsed = await readJsonObject(c);
   if (parsed.response) return parsed.response;
   const body = parsed.body;
   const name = textValue(body.name, 160);
   const phone = textValue(body.phone, 40);
   const whatsapp = textValue(body.whatsapp, 40);
-  if (!name) return badRequest(c, "Nome é obrigatório");
-  if (phone === null || whatsapp === null) return badRequest(c, "Contato inválido ou muito longo");
+  if (!name) return badRequest(c, "Nome Ã© obrigatÃ³rio");
+  if (phone === null || whatsapp === null) return badRequest(c, "Contato invÃ¡lido ou muito longo");
   const { data, error } = await svc()
     .from("af_clients")
     .update({ name, phone, whatsapp })
@@ -534,10 +545,10 @@ app.put(`${P}/clients/:id`, async (c) => {
   return c.json(data);
 });
 
-// ===== ROTA PÚBLICA DA OS =====
+// ===== ROTA PÃšBLICA DA OS =====
 app.get(`${P}/public/orders/:token`, async (c) => {
   const token = c.req.param("token");
-  if (!isUuid(token)) return badRequest(c, "Token inválido");
+  if (!isUuid(token)) return badRequest(c, "Token invÃ¡lido");
 
   const { data: order, error } = await svc()
     .from("af_service_orders")
@@ -548,7 +559,7 @@ app.get(`${P}/public/orders/:token`, async (c) => {
     .maybeSingle();
 
   if (error) return serverError(c, error);
-  if (!order) return c.json({ error: "OS não encontrada" }, 404);
+  if (!order) return c.json({ error: "OS nÃ£o encontrada" }, 404);
 
   const [{ data: profile }, { data: client }, { data: vehicle }] =
     await Promise.all([
@@ -590,7 +601,7 @@ app.delete(`${P}/clients/:id`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "Cliente inválido");
+  if (!isUuid(id)) return badRequest(c, "Cliente invÃ¡lido");
   const { error } = await svc()
     .from("af_clients")
     .delete()
@@ -600,7 +611,7 @@ app.delete(`${P}/clients/:id`, async (c) => {
   return c.json({ ok: true });
 });
 
-// ─── Vehicles ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Vehicles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 app.get(`${P}/vehicles`, async (c) => {
   const user = await getUser(c.req.header("Authorization"));
@@ -630,9 +641,9 @@ app.post(`${P}/vehicles`, async (c) => {
   const brand = textValue(body.brand, 80);
   const model = textValue(body.model, 120);
   const year = textValue(body.year, 8);
-  if (!plate) return badRequest(c, "Placa é obrigatória");
-  if (!isUuid(body.client_id)) return badRequest(c, "Cliente inválido");
-  if ([brand, model, year].some((v) => v === null)) return badRequest(c, "Dados do veículo inválidos ou muito longos");
+  if (!plate) return badRequest(c, "Placa Ã© obrigatÃ³ria");
+  if (!isUuid(body.client_id)) return badRequest(c, "Cliente invÃ¡lido");
+  if ([brand, model, year].some((v) => v === null)) return badRequest(c, "Dados do veÃ­culo invÃ¡lidos ou muito longos");
   // Verify client belongs to this workshop
   const { data: clientCheck } = await svc()
     .from("af_clients")
@@ -640,7 +651,7 @@ app.post(`${P}/vehicles`, async (c) => {
     .eq("id", body.client_id)
     .eq("workshop_id", user.id)
     .maybeSingle();
-  if (!clientCheck) return c.json({ error: "Cliente não encontrado" }, 404);
+  if (!clientCheck) return c.json({ error: "Cliente nÃ£o encontrado" }, 404);
   const { data, error } = await svc()
     .from("af_vehicles")
     .insert({
@@ -664,7 +675,7 @@ app.put(`${P}/vehicles/:id`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "Veículo inválido");
+  if (!isUuid(id)) return badRequest(c, "VeÃ­culo invÃ¡lido");
   const parsed = await readJsonObject(c);
   if (parsed.response) return parsed.response;
   const body = parsed.body;
@@ -673,9 +684,9 @@ app.put(`${P}/vehicles/:id`, async (c) => {
   const model = textValue(body.model, 120);
   const year = textValue(body.year, 8);
   const mileage = textValue(body.mileage, 32);
-  if (!plate) return badRequest(c, "Placa é obrigatória");
-  if (!isUuid(body.client_id)) return badRequest(c, "Cliente inválido");
-  if ([brand, model, year, mileage].some((v) => v === null)) return badRequest(c, "Dados do veículo inválidos ou muito longos");
+  if (!plate) return badRequest(c, "Placa Ã© obrigatÃ³ria");
+  if (!isUuid(body.client_id)) return badRequest(c, "Cliente invÃ¡lido");
+  if ([brand, model, year, mileage].some((v) => v === null)) return badRequest(c, "Dados do veÃ­culo invÃ¡lidos ou muito longos");
 
   const { data: clientCheck } = await svc()
     .from("af_clients")
@@ -683,7 +694,7 @@ app.put(`${P}/vehicles/:id`, async (c) => {
     .eq("id", body.client_id)
     .eq("workshop_id", user.id)
     .maybeSingle();
-  if (!clientCheck) return c.json({ error: "Cliente não encontrado" }, 404);
+  if (!clientCheck) return c.json({ error: "Cliente nÃ£o encontrado" }, 404);
 
   const { data, error } = await svc()
     .from("af_vehicles")
@@ -711,7 +722,7 @@ app.delete(`${P}/vehicles/:id`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "Veículo inválido");
+  if (!isUuid(id)) return badRequest(c, "VeÃ­culo invÃ¡lido");
   const { error } = await svc()
     .from("af_vehicles")
     .delete()
@@ -721,7 +732,7 @@ app.delete(`${P}/vehicles/:id`, async (c) => {
   return c.json({ ok: true });
 });
 
-// ─── Financial ─────────────────────────────────────────
+// â”€â”€â”€ Financial â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 app.get(`${P}/financial`, async (c) => {
   const user = await getUser(c.req.header("Authorization"));
@@ -756,10 +767,10 @@ app.post(`${P}/financial`, async (c) => {
   const amount = finiteAmount(body.amount);
   const type = body.type;
 
-  if (!description) return badRequest(c, "Descrição é obrigatória");
-  if (category === null) return badRequest(c, "Categoria inválida ou muito longa");
-  if (amount === null || amount <= 0) return badRequest(c, "Valor financeiro inválido");
-  if (type !== "income" && type !== "expense") return badRequest(c, "Tipo financeiro inválido");
+  if (!description) return badRequest(c, "DescriÃ§Ã£o Ã© obrigatÃ³ria");
+  if (category === null) return badRequest(c, "Categoria invÃ¡lida ou muito longa");
+  if (amount === null || amount <= 0) return badRequest(c, "Valor financeiro invÃ¡lido");
+  if (type !== "income" && type !== "expense") return badRequest(c, "Tipo financeiro invÃ¡lido");
 
   const { data, error } = await svc()
     .from("af_financial_entries")
@@ -786,7 +797,7 @@ app.delete(`${P}/financial/:id`, async (c) => {
   if (blocked) return blocked;
 
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "Lançamento inválido");
+  if (!isUuid(id)) return badRequest(c, "LanÃ§amento invÃ¡lido");
 
   const { error } = await svc()
     .from("af_financial_entries")
@@ -799,7 +810,7 @@ app.delete(`${P}/financial/:id`, async (c) => {
   return c.json({ ok: true });
 });
 
-// ─── Service Orders ───────────────────────────────────────────────────────────
+// â”€â”€â”€ Service Orders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 app.get(`${P}/orders`, async (c) => {
   const user = await getUser(c.req.header("Authorization"));
@@ -825,8 +836,8 @@ app.post(`${P}/orders`, async (c) => {
   const parsed = await readJsonObject(c, 96 * 1024);
   if (parsed.response) return parsed.response;
   const body = parsed.body;
-  if (!isUuid(body.client_id)) return badRequest(c, "Cliente inválido");
-  if (!isUuid(body.vehicle_id)) return badRequest(c, "Veículo inválido");
+  if (!isUuid(body.client_id)) return badRequest(c, "Cliente invÃ¡lido");
+  if (!isUuid(body.vehicle_id)) return badRequest(c, "VeÃ­culo invÃ¡lido");
   const reportedIssue = textValue(body.reported_issue, 4000);
   const employeeName = textValue(body.employee_name, 160);
   const servicesPerformed = textValue(body.services_performed, 12000, false);
@@ -835,12 +846,12 @@ app.post(`${P}/orders`, async (c) => {
   const deliveryDate = safeDateValue(body.delivery_date);
   const valueAmount = finiteAmount(body.value);
   const status = body.status ?? "aguardando";
-  if (!reportedIssue) return badRequest(c, "Problema relatado é obrigatório");
+  if (!reportedIssue) return badRequest(c, "Problema relatado Ã© obrigatÃ³rio");
   if ([employeeName, servicesPerformed, notes, checklist, deliveryDate].some((v) => v === null)) {
-    return badRequest(c, "Dados da OS inválidos ou muito longos");
+    return badRequest(c, "Dados da OS invÃ¡lidos ou muito longos");
   }
-  if (valueAmount === null) return badRequest(c, "Valor da OS inválido");
-  if (!["aguardando", "em_manutencao", "finalizado"].includes(status)) return badRequest(c, "Status inválido");
+  if (valueAmount === null) return badRequest(c, "Valor da OS invÃ¡lido");
+  if (!["aguardando", "em_manutencao", "finalizado"].includes(status)) return badRequest(c, "Status invÃ¡lido");
   // Verify client + vehicle belong to this workshop
   const { data: clientCheck } = await svc()
     .from("af_clients")
@@ -848,7 +859,7 @@ app.post(`${P}/orders`, async (c) => {
     .eq("id", body.client_id)
     .eq("workshop_id", user.id)
     .maybeSingle();
-  if (!clientCheck) return c.json({ error: "Cliente não encontrado" }, 404);
+  if (!clientCheck) return c.json({ error: "Cliente nÃ£o encontrado" }, 404);
 
   const { data: vCheck } = await svc()
     .from("af_vehicles")
@@ -858,7 +869,7 @@ app.post(`${P}/orders`, async (c) => {
     .eq("workshop_id", user.id)
     .maybeSingle();
   if (!vCheck)
-    return c.json({ error: "Veículo não encontrado para este cliente" }, 404);
+    return c.json({ error: "VeÃ­culo nÃ£o encontrado para este cliente" }, 404);
   const now = new Date().toISOString();
 
   const orderInsert: Record<string, any> = {
@@ -895,7 +906,7 @@ app.put(`${P}/orders/:id`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "OS inválida");
+  if (!isUuid(id)) return badRequest(c, "OS invÃ¡lida");
   const parsed = await readJsonObject(c, 96 * 1024);
   if (parsed.response) return parsed.response;
   const body = parsed.body;
@@ -903,41 +914,41 @@ app.put(`${P}/orders/:id`, async (c) => {
 
   if (body.reported_issue !== undefined) {
     const value = textValue(body.reported_issue, 4000);
-    if (!value) return badRequest(c, "Problema relatado inválido");
+    if (!value) return badRequest(c, "Problema relatado invÃ¡lido");
     patch.reported_issue = value;
   }
   if (body.employee_name !== undefined) {
     const value = textValue(body.employee_name, 160);
-    if (value === null) return badRequest(c, "Funcionário inválido");
+    if (value === null) return badRequest(c, "FuncionÃ¡rio invÃ¡lido");
     patch.employee_name = value;
   }
   if (body.services_performed !== undefined) {
     const value = textValue(body.services_performed, 12000, false);
-    if (value === null) return badRequest(c, "Serviços executados inválidos");
+    if (value === null) return badRequest(c, "ServiÃ§os executados invÃ¡lidos");
     patch.services_performed = value;
   }
   if (body.value !== undefined) {
     const amount = finiteAmount(body.value);
-    if (amount === null) return badRequest(c, "Valor da OS inválido");
+    if (amount === null) return badRequest(c, "Valor da OS invÃ¡lido");
     patch.value = String(amount);
   }
   if (body.status !== undefined) {
-    if (!["aguardando", "em_manutencao", "finalizado"].includes(body.status)) return badRequest(c, "Status inválido");
+    if (!["aguardando", "em_manutencao", "finalizado"].includes(body.status)) return badRequest(c, "Status invÃ¡lido");
     patch.status = body.status;
   }
   if (body.notes !== undefined) {
     const value = textValue(body.notes, 24000, false);
-    if (value === null) return badRequest(c, "Observações inválidas");
+    if (value === null) return badRequest(c, "ObservaÃ§Ãµes invÃ¡lidas");
     patch.notes = value;
   }
   if (body.delivery_date !== undefined) {
     const value = safeDateValue(body.delivery_date);
-    if (value === null) return badRequest(c, "Data de entrega inválida");
+    if (value === null) return badRequest(c, "Data de entrega invÃ¡lida");
     patch.delivery_date = value || null;
   }
   if (body.checklist !== undefined) {
     const value = textValue(body.checklist, 12000, false);
-    if (value === null) return badRequest(c, "Checklist inválido");
+    if (value === null) return badRequest(c, "Checklist invÃ¡lido");
     patch.checklist = value;
   }
 
@@ -960,7 +971,7 @@ app.delete(`${P}/orders/:id`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "OS inválida");
+  if (!isUuid(id)) return badRequest(c, "OS invÃ¡lida");
   const { error } = await svc()
     .from("af_service_orders")
     .delete()
@@ -1055,7 +1066,7 @@ async function syncAccessState(params: {
     .maybeSingle();
 
   if (profileError) throw profileError;
-  if (!profile) throw new Error("Perfil da oficina não encontrado");
+  if (!profile) throw new Error("Perfil da oficina nÃ£o encontrado");
 }
 
 async function activateTrialAccess(params: {
@@ -1095,7 +1106,7 @@ async function activateTrialAccess(params: {
 
 function getMercadoPagoToken() {
   const accessToken = Deno.env.get("MERCADOPAGO_ACCESS_TOKEN");
-  if (!accessToken) throw new Error("Mercado Pago token não configurado");
+  if (!accessToken) throw new Error("Mercado Pago token nÃ£o configurado");
   return accessToken;
 }
 
@@ -1132,7 +1143,7 @@ function timingSafeEqualHex(left: string, right: string) {
 async function validateMercadoPagoWebhookSignature(c: any, dataId: string) {
   const secret = Deno.env.get("MERCADOPAGO_WEBHOOK_SECRET");
   if (!secret) {
-    throw new Error("MERCADOPAGO_WEBHOOK_SECRET não configurado");
+    throw new Error("MERCADOPAGO_WEBHOOK_SECRET nÃ£o configurado");
   }
 
   const signatureHeader = c.req.header("x-signature") ?? "";
@@ -1304,7 +1315,7 @@ async function processApprovedPayment(paymentId: string) {
 
   if (!response.ok) {
     throw new Error(
-      payment?.message ?? "Pagamento não encontrado no Mercado Pago",
+      payment?.message ?? "Pagamento nÃ£o encontrado no Mercado Pago",
     );
   }
 
@@ -1314,7 +1325,7 @@ async function processApprovedPayment(paymentId: string) {
 
   const userId = String(payment?.external_reference ?? "");
   if (!isUuid(userId))
-    throw new Error("Pagamento sem referência de usuário válida");
+    throw new Error("Pagamento sem referÃªncia de usuÃ¡rio vÃ¡lida");
 
   const expectedCurrency = Deno.env.get("MERCADOPAGO_CURRENCY") ?? "BRL";
   const expectedAmount = Number(
@@ -1323,13 +1334,13 @@ async function processApprovedPayment(paymentId: string) {
   const receivedAmount = Number(payment?.transaction_amount);
 
   if (payment?.currency_id !== expectedCurrency) {
-    throw new Error("Moeda do pagamento inválida");
+    throw new Error("Moeda do pagamento invÃ¡lida");
   }
   if (
     !Number.isFinite(receivedAmount) ||
     Math.abs(receivedAmount - expectedAmount) > 0.009
   ) {
-    throw new Error("Valor do pagamento inválido");
+    throw new Error("Valor do pagamento invÃ¡lido");
   }
 
   const expectedCollector = Deno.env.get("MERCADOPAGO_COLLECTOR_ID");
@@ -1337,7 +1348,7 @@ async function processApprovedPayment(paymentId: string) {
     expectedCollector &&
     String(payment?.collector_id ?? "") !== expectedCollector
   ) {
-    throw new Error("Recebedor do pagamento inválido");
+    throw new Error("Recebedor do pagamento invÃ¡lido");
   }
 
   const { data: profile, error: profileError } = await svc()
@@ -1347,7 +1358,7 @@ async function processApprovedPayment(paymentId: string) {
     .maybeSingle();
 
   if (profileError) throw profileError;
-  if (!profile) throw new Error("Usuário do pagamento não encontrado");
+  if (!profile) throw new Error("UsuÃ¡rio do pagamento nÃ£o encontrado");
 
   const { data: subscription, error: subscriptionError } = await svc()
     .from("subscriptions")
@@ -1419,17 +1430,17 @@ async function processPreapproval(preapprovalId: string) {
 
   if (!response.ok) {
     throw new Error(
-      preapproval?.message ?? "Assinatura não encontrada no Mercado Pago",
+      preapproval?.message ?? "Assinatura nÃ£o encontrada no Mercado Pago",
     );
   }
 
   const userId = String(preapproval?.external_reference ?? "");
   if (!isUuid(userId))
-    throw new Error("Assinatura sem referência de usuário válida");
+    throw new Error("Assinatura sem referÃªncia de usuÃ¡rio vÃ¡lida");
 
   const expectedPlanId = Deno.env.get("MERCADOPAGO_PREAPPROVAL_PLAN_ID");
   if (expectedPlanId && preapproval?.preapproval_plan_id !== expectedPlanId) {
-    throw new Error("Plano da assinatura inválido");
+    throw new Error("Plano da assinatura invÃ¡lido");
   }
 
   const current = await getSubscription(userId);
@@ -1499,7 +1510,7 @@ async function processPreapproval(preapprovalId: string) {
   return { ok: true, provider_status: providerStatus };
 }
 
-// ─── Billing ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Billing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 app.post(`${P}/billing/create-checkout`, async (c) => {
   try {
@@ -1519,7 +1530,7 @@ app.post(`${P}/billing/create-checkout`, async (c) => {
           items: [
             {
               id: "vortan-oficina-mensal",
-              title: "Assinatura Vortan Oficina - 1 mês",
+              title: "Assinatura Vortan Oficina - 1 mÃªs",
               quantity: 1,
               currency_id: "BRL",
               unit_price: Number(
@@ -1568,11 +1579,11 @@ app.post(`${P}/billing/create-subscription`, async (c) => {
   try {
     const user = await getUser(c.req.header("Authorization"));
     if (!user) return unauthorized(c);
-    if (!user.email) return badRequest(c, "Usuário sem e-mail válido");
+    if (!user.email) return badRequest(c, "UsuÃ¡rio sem e-mail vÃ¡lido");
 
     const planId = Deno.env.get("MERCADOPAGO_PREAPPROVAL_PLAN_ID");
     if (!planId)
-      return serverError(c, "ID do plano recorrente não configurado");
+      return serverError(c, "ID do plano recorrente nÃ£o configurado");
 
     const existing = await getSubscription(user.id);
     if (existing?.preapproval_id) {
@@ -1624,7 +1635,7 @@ app.post(`${P}/billing/create-subscription`, async (c) => {
     if (!data?.id || !data?.init_point) {
       return serverError(
         c,
-        "Mercado Pago não retornou a assinatura corretamente",
+        "Mercado Pago nÃ£o retornou a assinatura corretamente",
       );
     }
 
@@ -1681,7 +1692,7 @@ app.post(`${P}/billing/webhook`, async (c) => {
       c.req.query("data.id") ?? c.req.query("data_id") ?? body?.data?.id ?? "",
     );
 
-    if (!resourceId) return badRequest(c, "Notificação sem ID");
+    if (!resourceId) return badRequest(c, "NotificaÃ§Ã£o sem ID");
 
     const validSignature = await validateMercadoPagoWebhookSignature(
       c,
@@ -1689,7 +1700,7 @@ app.post(`${P}/billing/webhook`, async (c) => {
     );
     if (!validSignature) {
       return c.json(
-        { ok: false, error: "Assinatura do webhook inválida" },
+        { ok: false, error: "Assinatura do webhook invÃ¡lida" },
         401,
       );
     }
@@ -1719,7 +1730,7 @@ app.post(`${P}/billing/webhook`, async (c) => {
         `/authorized_payments/${encodeURIComponent(resourceId)}`,
       );
       if (!invoice.response.ok) {
-        throw new Error(invoice.data?.message ?? "Fatura não encontrada");
+        throw new Error(invoice.data?.message ?? "Fatura nÃ£o encontrada");
       }
       const linkedPaymentId = invoice.data?.payment?.id;
       if (!linkedPaymentId || invoice.data?.payment?.status !== "approved") {
@@ -1741,10 +1752,10 @@ app.post(`${P}/billing/webhook`, async (c) => {
     await finishWebhookEvent(claimedEventId);
     return c.json(result);
   } catch (error: any) {
-    const errorMessage = error?.message ?? "Erro ao processar notificação";
+    const errorMessage = error?.message ?? "Erro ao processar notificaÃ§Ã£o";
     if (claimedEventId) await failWebhookEvent(claimedEventId, errorMessage);
     console.error("Erro no webhook do Mercado Pago:", error);
-    return c.json({ ok: false, error: "Erro ao processar notificação" }, 500);
+    return c.json({ ok: false, error: "Erro ao processar notificaÃ§Ã£o" }, 500);
   }
 });
 
@@ -1755,7 +1766,7 @@ app.post(`${P}/billing/cancel-subscription`, async (c) => {
 
     const sub = await getSubscription(user.id);
     if (!sub?.preapproval_id) {
-      return c.json({ error: "Assinatura recorrente não encontrada." }, 404);
+      return c.json({ error: "Assinatura recorrente nÃ£o encontrada." }, 404);
     }
 
     const response = await fetch(
@@ -1812,7 +1823,7 @@ app.post(`${P}/billing/cancel-subscription`, async (c) => {
     return c.json({
       ok: true,
       message: stillHasAccess
-        ? "Assinatura cancelada. Você continuará com acesso até o fim do período pago."
+        ? "Assinatura cancelada. VocÃª continuarÃ¡ com acesso atÃ© o fim do perÃ­odo pago."
         : "Assinatura cancelada.",
       expires_at: sub.expires_at,
     });
@@ -1826,3 +1837,6 @@ app.post(`${P}/billing/cancel-subscription`, async (c) => {
 });
 
 Deno.serve(app.fetch);
+
+
+
