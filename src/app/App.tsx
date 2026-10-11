@@ -1030,8 +1030,23 @@ function RegisterScreen({ onGoLogin }: { onGoLogin: () => void }) {
       return;
     }
 
-    if (form.password.length < 6) {
-      setError("Senha deve ter ao menos 6 caracteres.");
+    if (form.password.length < 8) {
+      setError("A senha precisa ter pelo menos 8 caracteres.");
+      return;
+    }
+
+    if (!/[A-Z]/.test(form.password)) {
+      setError("A senha precisa ter pelo menos uma letra maiúscula.");
+      return;
+    }
+
+    if (!/[a-z]/.test(form.password)) {
+      setError("A senha precisa ter pelo menos uma letra minúscula.");
+      return;
+    }
+
+    if (!/[0-9]/.test(form.password)) {
+      setError("A senha precisa ter pelo menos um número.");
       return;
     }
 
@@ -1068,7 +1083,7 @@ function RegisterScreen({ onGoLogin }: { onGoLogin: () => void }) {
         error.message.toLowerCase().includes("senha")
       ) {
         setError(
-          "A senha precisa ter pelo menos 6 caracteres, uma letra maiúscula e um número.",
+          "A senha precisa ter pelo menos 8 caracteres, com maiúscula, minúscula e número.",
         );
       } else if (
         error.message.toLowerCase().includes("user already registered")
@@ -1171,7 +1186,7 @@ function RegisterScreen({ onGoLogin }: { onGoLogin: () => void }) {
             <Input
               label="Senha"
               type="password"
-              placeholder="Mínimo 6 caracteres"
+              placeholder="Mínimo 8 caracteres"
               value={form.password}
               onChange={set("password")}
               required
@@ -5807,6 +5822,21 @@ function OrderDetail({
   }
 
   async function uploadPhoto(file: File, photoType: OrderPhoto["photo_type"]) {
+    const allowedPhotoTypes: Record<string, string> = {
+      "image/png": "png",
+      "image/jpeg": "jpg",
+      "image/webp": "webp",
+    };
+    const safeExtension = allowedPhotoTypes[file.type];
+    if (!safeExtension) {
+      showToast("Use uma foto PNG, JPG ou WEBP.", "error");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      showToast("A foto deve ter no máximo 8 MB.", "error");
+      return;
+    }
+
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -5818,8 +5848,7 @@ function OrderDetail({
     setUploading(true);
 
     try {
-      const ext = file.name.split(".").pop() || "jpg";
-      const fileName = `${Date.now()}-${cleanFileName(file.name || `foto.${ext}`)}`;
+      const fileName = `${Date.now()}-${crypto.randomUUID()}.${safeExtension}`;
       const filePath = `${user.id}/${order.id}/${photoType}/${fileName}`;
 
       const { error: uploadError } = await supabase.storage
@@ -5839,7 +5868,7 @@ function OrderDetail({
           order_id: order.id,
           file_path: filePath,
           public_url: publicData.publicUrl,
-          file_name: file.name,
+          file_name: file.name.slice(0, 200),
           photo_type: photoType,
         });
 
@@ -6368,6 +6397,23 @@ function SettingsPage({ profile }: { profile: Profile | null }) {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const allowedLogoTypes: Record<string, string> = {
+      "image/png": "png",
+      "image/jpeg": "jpg",
+      "image/webp": "webp",
+    };
+    const safeExtension = allowedLogoTypes[file.type];
+    if (!safeExtension) {
+      setToast({ msg: "Use uma imagem PNG, JPG ou WEBP.", type: "error" });
+      e.target.value = "";
+      return;
+    }
+    if (file.size > 3 * 1024 * 1024) {
+      setToast({ msg: "A logo deve ter no máximo 3 MB.", type: "error" });
+      e.target.value = "";
+      return;
+    }
+
     try {
       const {
         data: { user },
@@ -6381,8 +6427,7 @@ function SettingsPage({ profile }: { profile: Profile | null }) {
         return;
       }
 
-      const fileExt = file.name.split(".").pop();
-      const fileName = `${user.id}/logo-${Date.now()}.${fileExt}`;
+      const fileName = `${user.id}/logo-${Date.now()}.${safeExtension}`;
 
       const { error } = await supabase.storage
         .from("workshop-logos")
@@ -7620,13 +7665,18 @@ export default function App() {
       setError("");
       setSuccess("");
 
-      if (password.length < 6) {
-        setError("A senha precisa ter pelo menos 6 caracteres.");
+      if (password.length < 8) {
+        setError("A senha precisa ter pelo menos 8 caracteres.");
         return;
       }
 
       if (!/[A-Z]/.test(password)) {
         setError("A senha precisa ter pelo menos uma letra maiúscula.");
+        return;
+      }
+
+      if (!/[a-z]/.test(password)) {
+        setError("A senha precisa ter pelo menos uma letra minúscula.");
         return;
       }
 
