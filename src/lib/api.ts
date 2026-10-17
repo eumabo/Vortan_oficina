@@ -275,6 +275,35 @@ export async function createPixPayment(
   });
 }
 
+export interface CardPaymentInput {
+  holderName: string;
+  number: string;
+  expiryMonth: string;
+  expiryYear: string;
+  ccv: string;
+  cpfCnpj: string;
+  postalCode: string;
+  addressNumber: string;
+  phone: string;
+}
+
+export interface CardPaymentResponse {
+  provider: "asaas";
+  payment_id: string;
+  amount: number;
+  status: string;
+  access_activated: boolean;
+}
+
+export async function createCardPayment(
+  data: CardPaymentInput,
+): Promise<CardPaymentResponse> {
+  return apiFetch<CardPaymentResponse>("/billing/card/create", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
 export async function createCheckout(): Promise<BillingCheckoutResponse> {
   return apiFetch<BillingCheckoutResponse>("/billing/create-checkout", {
     method: "POST",

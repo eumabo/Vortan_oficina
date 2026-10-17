@@ -40,6 +40,8 @@ import {
   Copy,
   QrCode,
   LockKeyhole,
+  CreditCard,
+  ShieldCheck,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import * as API from "../lib/api";
@@ -1488,6 +1490,204 @@ function OnboardingScreen({
         >
           Sair
         </button>
+      </div>
+    </div>
+  );
+}
+
+
+type CardPaymentForm = {
+  holderName: string;
+  number: string;
+  expiry: string;
+  ccv: string;
+  cpfCnpj: string;
+  postalCode: string;
+  addressNumber: string;
+  phone: string;
+};
+
+function formatCardNumber(value: string) {
+  return value.replace(/\D/g, "").slice(0, 19).replace(/(.{4})/g, "$1 ").trim();
+}
+
+function formatExpiry(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 4);
+  if (digits.length <= 2) return digits;
+  return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+}
+
+function CardPaymentScreen({
+  amount,
+  loading,
+  error,
+  initialName,
+  initialPhone,
+  onPay,
+  onClose,
+}: {
+  amount: number;
+  loading: boolean;
+  error: string | null;
+  initialName: string;
+  initialPhone: string;
+  onPay: (data: API.CardPaymentInput) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [form, setForm] = useState<CardPaymentForm>({
+    holderName: initialName,
+    number: "",
+    expiry: "",
+    ccv: "",
+    cpfCnpj: "",
+    postalCode: "",
+    addressNumber: "",
+    phone: initialPhone,
+  });
+
+  const set = (key: keyof CardPaymentForm, value: string) =>
+    setForm((current) => ({ ...current, [key]: value }));
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const expiryDigits = form.expiry.replace(/\D/g, "");
+    await onPay({
+      holderName: form.holderName.trim(),
+      number: form.number.replace(/\D/g, ""),
+      expiryMonth: expiryDigits.slice(0, 2),
+      expiryYear: expiryDigits.slice(2),
+      ccv: form.ccv.replace(/\D/g, ""),
+      cpfCnpj: form.cpfCnpj.replace(/\D/g, ""),
+      postalCode: form.postalCode.replace(/\D/g, ""),
+      addressNumber: form.addressNumber.trim(),
+      phone: form.phone.replace(/\D/g, ""),
+    });
+  }
+
+  return (
+    <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4 py-8">
+      <div className="w-full max-w-md">
+        <Logo />
+        <Card className="p-6 mt-5">
+          <div className="flex items-start justify-between gap-4 mb-5">
+            <div>
+              <div className="flex items-center gap-2 text-primary mb-1">
+                <CreditCard size={18} />
+                <span className="text-xs font-semibold uppercase tracking-[0.16em]">Cartão de crédito</span>
+              </div>
+              <h1 className="font-heading font-bold text-2xl text-foreground">1 mês de Vortan Oficina</h1>
+              <p className="text-sm text-muted-foreground mt-1">Pagamento único, sem renovação automática.</p>
+            </div>
+            <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1" aria-label="Voltar">
+              <X size={20} />
+            </button>
+          </div>
+
+          <div className="rounded-lg border border-primary/15 bg-primary/5 p-4 mb-5 flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">Total</span>
+            <span className="font-heading font-bold text-2xl text-foreground">{fmtMoney(amount)}</span>
+          </div>
+
+          <form onSubmit={(e) => void submit(e)} className="space-y-4" autoComplete="on">
+            <Input
+              label="Nome impresso no cartão"
+              value={form.holderName}
+              onChange={(e) => set("holderName", e.target.value.slice(0, 120))}
+              placeholder="NOME DO TITULAR"
+              autoComplete="cc-name"
+              required
+            />
+
+            <Input
+              label="Número do cartão"
+              value={form.number}
+              onChange={(e) => set("number", formatCardNumber(e.target.value))}
+              placeholder="0000 0000 0000 0000"
+              inputMode="numeric"
+              autoComplete="cc-number"
+              required
+            />
+
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Validade"
+                value={form.expiry}
+                onChange={(e) => set("expiry", formatExpiry(e.target.value))}
+                placeholder="MM/AA"
+                inputMode="numeric"
+                autoComplete="cc-exp"
+                required
+              />
+              <Input
+                label="CVV"
+                value={form.ccv}
+                onChange={(e) => set("ccv", e.target.value.replace(/\D/g, "").slice(0, 4))}
+                placeholder="123"
+                inputMode="numeric"
+                autoComplete="cc-csc"
+                type="password"
+                required
+              />
+            </div>
+
+            <Input
+              label="CPF/CNPJ do titular"
+              value={form.cpfCnpj}
+              onChange={(e) => set("cpfCnpj", e.target.value.replace(/\D/g, "").slice(0, 14))}
+              placeholder="Somente números"
+              inputMode="numeric"
+              autoComplete="off"
+              required
+            />
+
+            <div className="grid grid-cols-[1.35fr_0.65fr] gap-3">
+              <Input
+                label="CEP"
+                value={form.postalCode}
+                onChange={(e) => set("postalCode", e.target.value.replace(/\D/g, "").slice(0, 8))}
+                placeholder="00000000"
+                inputMode="numeric"
+                autoComplete="postal-code"
+                required
+              />
+              <Input
+                label="Número"
+                value={form.addressNumber}
+                onChange={(e) => set("addressNumber", e.target.value.slice(0, 20))}
+                placeholder="123"
+                autoComplete="address-line2"
+                required
+              />
+            </div>
+
+            <Input
+              label="Telefone"
+              value={form.phone}
+              onChange={(e) => set("phone", e.target.value.replace(/\D/g, "").slice(0, 11))}
+              placeholder="11999999999"
+              inputMode="tel"
+              autoComplete="tel"
+              required
+            />
+
+            {error && (
+              <div className="rounded-lg border border-destructive/25 bg-destructive/10 px-3 py-2.5 text-sm text-destructive flex gap-2">
+                <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <Btn variant="primary" className="w-full justify-center" loading={loading} type="submit">
+              {!loading ? <CreditCard size={16} /> : null}
+              {!loading ? `Pagar ${fmtMoney(amount)}` : "Processando..."}
+            </Btn>
+          </form>
+
+          <div className="mt-4 flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground">
+            <ShieldCheck size={15} className="text-emerald-400 shrink-0 mt-0.5" />
+            <span>Os dados do cartão são enviados por conexão HTTPS para o processamento do Asaas e não são armazenados pela Vortan.</span>
+          </div>
+        </Card>
       </div>
     </div>
   );
@@ -7540,6 +7740,9 @@ export default function App() {
     "landing" | "login" | "register" | "terms" | "privacy"
   >("landing");
   const [page, setPage] = useState<Page>("dashboard");
+  const [mountedPages, setMountedPages] = useState<Set<Page>>(
+    () => new Set<Page>(["dashboard"]),
+  );
   const [activeOrder, setActiveOrder] = useState<ServiceOrder | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -7560,6 +7763,10 @@ export default function App() {
   const [pixCpfCnpj, setPixCpfCnpj] = useState("");
   const [pixLoading, setPixLoading] = useState(false);
   const [pixError, setPixError] = useState<string | null>(null);
+  const [cardPaymentOpen, setCardPaymentOpen] = useState(false);
+  const [cardLoading, setCardLoading] = useState(false);
+  const [cardError, setCardError] = useState<string | null>(null);
+  const [cardPaymentResult, setCardPaymentResult] = useState<API.CardPaymentResponse | null>(null);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -7678,6 +7885,10 @@ export default function App() {
       navigate("/dashboard", { replace: true });
     }
   }, [session, sessionLoading, location.pathname, navigate]);
+
+  // Recarrega os dados apenas quando muda o usuário autenticado.
+  // Refresh de token/retorno para a aba não deve derrubar a UI para LoadingScreen.
+  const sessionUserId = session?.user.id ?? null;
 
   // Setup DB + load data when session available
   useEffect(() => {
@@ -7832,7 +8043,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [session]);
+  }, [sessionUserId]);
 
   const loadClients = useCallback(async () => {
     const data = await API.getClients();
@@ -7882,6 +8093,34 @@ export default function App() {
     if (!pixPayment) void generatePixPayment();
   }, [pixPayment, generatePixPayment]);
 
+  const submitCardPayment = useCallback(async (data: API.CardPaymentInput) => {
+    setCardLoading(true);
+    setCardError(null);
+    try {
+      const result = await API.createCardPayment(data);
+      setCardPaymentResult(result);
+
+      const updated = await API.getProfile();
+      if (updated) {
+        setProfile(updated);
+        if (isPaid(updated)) {
+          setCardPaymentOpen(false);
+          setCardPaymentResult(null);
+          setPage("dashboard");
+          try {
+            await loadAll();
+          } catch (loadAfterPaymentError) {
+            console.warn("Acesso liberado, mas os dados serão recarregados depois:", loadAfterPaymentError);
+          }
+        }
+      }
+    } catch (error: any) {
+      setCardError(error?.message || "Não foi possível processar o cartão.");
+    } finally {
+      setCardLoading(false);
+    }
+  }, [loadAll]);
+
   useEffect(() => {
     if (!pixPaymentOpen || !pixPayment?.payment_id || !session) return;
 
@@ -7921,12 +8160,59 @@ export default function App() {
     };
   }, [pixPaymentOpen, pixPayment?.payment_id, session, loadAll]);
 
+  useEffect(() => {
+    if (!cardPaymentOpen || !cardPaymentResult?.payment_id || !session) return;
+
+    let cancelled = false;
+    let checking = false;
+    const checkPayment = async () => {
+      if (checking || cancelled) return;
+      checking = true;
+      try {
+        const updated = await API.getProfile();
+        if (cancelled || !updated) return;
+        setProfile(updated);
+        if (isPaid(updated)) {
+          setCardPaymentOpen(false);
+          setCardPaymentResult(null);
+          setCardError(null);
+          setPage("dashboard");
+          try {
+            await loadAll();
+          } catch (loadAfterPaymentError) {
+            console.warn("Acesso liberado, mas os dados serão recarregados depois:", loadAfterPaymentError);
+          }
+        }
+      } catch (error) {
+        console.warn("Falha temporária ao verificar o cartão:", error);
+      } finally {
+        checking = false;
+      }
+    };
+
+    void checkPayment();
+    const timer = window.setInterval(() => void checkPayment(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [cardPaymentOpen, cardPaymentResult?.payment_id, session, loadAll]);
+
   const loadFinancialEntries = useCallback(async () => {
     const data = await API.getFinancialEntries();
     setFinancialEntries(data);
   }, []);
 
   function nav(p: Page) {
+    if (p !== "order-detail") {
+      setMountedPages((current) => {
+        if (current.has(p)) return current;
+        const next = new Set(current);
+        next.add(p);
+        return next;
+      });
+    }
+
     setPage(p);
     setSidebarOpen(false);
     if (p !== "order-detail") setActiveOrder(null);
@@ -8161,6 +8447,26 @@ export default function App() {
     );
   }
 
+  if (cardPaymentOpen && profile && !isPaid(profile)) {
+    return (
+      <CardPaymentScreen
+        amount={29.9}
+        loading={cardLoading}
+        error={cardError}
+        initialName={profile.owner_name || ""}
+        initialPhone={(profile.whatsapp || profile.phone || "").replace(/\D/g, "")}
+        onPay={submitCardPayment}
+        onClose={() => {
+          if (!cardLoading) {
+            setCardPaymentOpen(false);
+            setCardPaymentResult(null);
+            setCardError(null);
+          }
+        }}
+      />
+    );
+  }
+
   if (!profile || !isPaid(profile)) {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4">
@@ -8210,22 +8516,14 @@ export default function App() {
             <Btn
               variant="secondary"
               className="w-full justify-center mt-3"
-              loading={paymentRedirecting === "single"}
-              onClick={async () => {
-                setPaymentRedirecting("single");
-                try {
-                  const data = await API.createCheckout();
-                  if (!data.checkout_url) {
-                    throw new Error("O Asaas não retornou o link de pagamento.");
-                  }
-                  window.location.href = data.checkout_url;
-                } catch (error: any) {
-                  alert(error?.message || "Não foi possível abrir o pagamento no cartão.");
-                  setPaymentRedirecting(null);
-                }
+              onClick={() => {
+                setCardError(null);
+                setCardPaymentResult(null);
+                setCardPaymentOpen(true);
               }}
             >
-              {paymentRedirecting !== "single" ? "Pagar 1 mês no cartão" : null}
+              <CreditCard size={16} />
+              Pagar 1 mês no cartão
             </Btn>
 
             <Btn
@@ -8303,47 +8601,57 @@ export default function App() {
         </header>
 
         <main className="flex-1 px-4 py-5 max-w-6xl mx-auto w-full pb-8">
-          {page === "dashboard" && (
-            <Dashboard
-              clients={clients}
-              vehicles={vehicles}
-              orders={orders.filter((o) => !isBudgetOrder(o))}
-              profile={profile}
-              onNav={nav}
-              onViewOrder={viewOrder}
-            />
+          {mountedPages.has("dashboard") && (
+            <div className={page === "dashboard" ? "" : "hidden"}>
+              <Dashboard
+                clients={clients}
+                vehicles={vehicles}
+                orders={orders.filter((o) => !isBudgetOrder(o))}
+                profile={profile}
+                onNav={nav}
+                onViewOrder={viewOrder}
+              />
+            </div>
           )}
 
-          {page === "clients" && (
-            <ClientsPage clients={clients} onReload={loadAll} />
+          {mountedPages.has("clients") && (
+            <div className={page === "clients" ? "" : "hidden"}>
+              <ClientsPage clients={clients} onReload={loadAll} />
+            </div>
           )}
 
-          {page === "vehicles" && (
-            <VehiclesPage
-              vehicles={vehicles}
-              clients={clients}
-              onReload={loadAll}
-            />
+          {mountedPages.has("vehicles") && (
+            <div className={page === "vehicles" ? "" : "hidden"}>
+              <VehiclesPage
+                vehicles={vehicles}
+                clients={clients}
+                onReload={loadAll}
+              />
+            </div>
           )}
 
-          {page === "budgets" && (
-            <BudgetsPage
-              profile={profile}
-              orders={orders.filter(isBudgetOrder)}
-              clients={clients}
-              vehicles={vehicles}
-              onReload={loadAll}
-            />
+          {mountedPages.has("budgets") && (
+            <div className={page === "budgets" ? "" : "hidden"}>
+              <BudgetsPage
+                profile={profile}
+                orders={orders.filter(isBudgetOrder)}
+                clients={clients}
+                vehicles={vehicles}
+                onReload={loadAll}
+              />
+            </div>
           )}
 
-          {page === "orders" && (
-            <OrdersPage
-              orders={orders.filter((o) => !isBudgetOrder(o))}
-              clients={clients}
-              vehicles={vehicles}
-              onReload={loadAll}
-              onView={viewOrder}
-            />
+          {mountedPages.has("orders") && (
+            <div className={page === "orders" ? "" : "hidden"}>
+              <OrdersPage
+                orders={orders.filter((o) => !isBudgetOrder(o))}
+                clients={clients}
+                vehicles={vehicles}
+                onReload={loadAll}
+                onView={viewOrder}
+              />
+            </div>
           )}
 
           {page === "order-detail" && activeOrder && (
@@ -8357,29 +8665,41 @@ export default function App() {
             />
           )}
 
-          {page === "history" && (
-            <HistoryPage
-              orders={orders.filter((o) => !isBudgetOrder(o))}
-              clients={clients}
-              vehicles={vehicles}
-              onView={(order) => {
-                setActiveOrder(order);
-                nav("order-detail");
-              }}
-            />
+          {mountedPages.has("history") && (
+            <div className={page === "history" ? "" : "hidden"}>
+              <HistoryPage
+                orders={orders.filter((o) => !isBudgetOrder(o))}
+                clients={clients}
+                vehicles={vehicles}
+                onView={(order) => {
+                  setActiveOrder(order);
+                  nav("order-detail");
+                }}
+              />
+            </div>
           )}
 
-          {page === "financial" && (
-            <FinancialPage
-              orders={orders.filter((o) => !isBudgetOrder(o))}
-              entries={financialEntries}
-              onReload={loadAll}
-            />
+          {mountedPages.has("financial") && (
+            <div className={page === "financial" ? "" : "hidden"}>
+              <FinancialPage
+                orders={orders.filter((o) => !isBudgetOrder(o))}
+                entries={financialEntries}
+                onReload={loadAll}
+              />
+            </div>
           )}
 
-          {page === "admin" && profile?.is_admin && <AdminPage />}
+          {mountedPages.has("admin") && profile?.is_admin && (
+            <div className={page === "admin" ? "" : "hidden"}>
+              <AdminPage />
+            </div>
+          )}
 
-          {page === "settings" && <SettingsPage profile={profile} />}
+          {mountedPages.has("settings") && (
+            <div className={page === "settings" ? "" : "hidden"}>
+              <SettingsPage profile={profile} />
+            </div>
+          )}
         </main>
       </div>
     </div>

@@ -1238,6 +1238,47 @@ function isValidCpfCnpj(value: string) {
   return isValidCpf(value) || isValidCnpj(value);
 }
 
+function isValidCardNumber(value: string) {
+  if (!/^\d{13,19}$/.test(value)) return false;
+  let sum = 0;
+  let doubleDigit = false;
+  for (let i = value.length - 1; i >= 0; i -= 1) {
+    let digit = Number(value[i]);
+    if (doubleDigit) {
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+    sum += digit;
+    doubleDigit = !doubleDigit;
+  }
+  return sum % 10 === 0;
+}
+
+function normalizeExpiryYear(value: unknown) {
+  const digits = onlyDigits(value);
+  if (digits.length === 2) return `20${digits}`;
+  if (digits.length === 4) return digits;
+  return "";
+}
+
+function requesterIp(c: any) {
+  const value =
+    c.req.header("cf-connecting-ip") ??
+    c.req.header("x-real-ip") ??
+    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
+    "";
+  const ip = String(value).trim();
+  if (!ip || ip.length > 64 || !/^[0-9a-fA-F:.]+$/.test(ip)) return null;
+  return ip;
+}
+
+class BillingClientError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BillingClientError";
+  }
+}
+
 async function getAsaasCustomer(customerId: string) {
   const { response, data } = await asaasRequest(`/customers/${encodeURIComponent(customerId)}`);
   if (response.status === 404) return null;
@@ -1395,6 +1436,118 @@ async function createAsaasPixPayment(user: any, cpfCnpj?: string) {
     encoded_image: String(qr.data.encodedImage),
     payload: String(qr.data.payload),
     expiration_date: qr.data?.expirationDate ? String(qr.data.expirationDate) : null,
+  };
+}
+
+async function createAsaasCardPayment(user: any, body: any, remoteIp: string) {
+  if (!user.email) throw new BillingClientError("Usuário sem e-mail válido");
+
+  const holderName = textValue(body?.holderName, 120);
+  const cardNumber = onlyDigits(body?.number);
+  const expiryMonth = onlyDigits(body?.expiryMonth).padStart(2, "0");
+  const expiryYear = normalizeExpiryYear(body?.expiryYear);
+  const ccv = onlyDigits(body?.ccv);
+  const cpfCnpj = onlyDigits(body?.cpfCnpj);
+  const postalCode = onlyDigits(body?.postalCode);
+  const addressNumber = textValue(body?.addressNumber, 20);
+  const phone = onlyDigits(body?.phone);
+
+  if (!holderName || holderName.length < 2) throw new BillingClientError("Nome do titular inválido");
+  if (!isValidCardNumber(cardNumber)) throw new BillingClientError("Número do cartão inválido");
+  if (!/^\d{2}$/.test(expiryMonth) || Number(expiryMonth) < 1 || Number(expiryMonth) > 12) {
+    throw new BillingClientError("Mês de validade inválido");
+  }
+  if (!/^\d{4}$/.test(expiryYear)) throw new BillingClientError("Ano de validade inválido");
+  const now = new Date();
+  const expiryBoundary = new Date(Number(expiryYear), Number(expiryMonth), 1);
+  if (expiryBoundary.getTime() <= new Date(now.getFullYear(), now.getMonth(), 1).getTime()) {
+    throw new BillingClientError("Cartão vencido");
+  }
+  if (!/^\d{3,4}$/.test(ccv)) throw new BillingClientError("CVV inválido");
+  if (!isValidCpfCnpj(cpfCnpj)) throw new BillingClientError("CPF/CNPJ inválido");
+  if (!/^\d{8}$/.test(postalCode)) throw new BillingClientError("CEP inválido");
+  if (!addressNumber) throw new BillingClientError("Número do endereço inválido");
+  if (!/^\d{10,11}$/.test(phone)) throw new BillingClientError("Telefone inválido");
+
+  const customerId = await getPixCustomerForUser(user, cpfCnpj);
+  if (!customerId) throw new BillingClientError("Não foi possível identificar o pagador");
+
+  const price = getMonthlyPrice();
+  const externalReference = `vortan:single:${user.id}`;
+  const payment = await asaasRequest("/payments", {
+    method: "POST",
+    body: JSON.stringify({
+      customer: customerId,
+      billingType: "CREDIT_CARD",
+      value: price,
+      dueDate: formatAsaasDate(new Date()),
+      description: "Vortan Oficina - acesso por 1 mês",
+      externalReference,
+      creditCard: {
+        holderName,
+        number: cardNumber,
+        expiryMonth,
+        expiryYear,
+        ccv,
+      },
+      creditCardHolderInfo: {
+        name: holderName,
+        email: String(user.email).slice(0, 160),
+        cpfCnpj,
+        postalCode,
+        addressNumber,
+        phone,
+        mobilePhone: phone,
+      },
+      remoteIp,
+    }),
+  });
+
+  if (!payment.response.ok || !payment.data?.id) {
+    const description =
+      payment.data?.errors?.[0]?.description ??
+      payment.data?.message ??
+      "Pagamento não autorizado. Confira os dados do cartão.";
+    throw new BillingClientError(String(description).slice(0, 300));
+  }
+
+  const paymentId = String(payment.data.id);
+  const providerStatus = String(payment.data?.status ?? "PENDING").toUpperCase();
+
+  // Se o próprio Asaas já retornou a cobrança como confirmada/recebida,
+  // ativamos pelo mesmo reconciliador idempotente usado pelo webhook.
+  // Nos demais estados, aguardamos os webhooks de cobrança antes de liberar acesso.
+  if (["CONFIRMED", "RECEIVED"].includes(providerStatus)) {
+    await processAsaasPayment(payment.data, "API_CARD_CONFIRMED");
+  } else {
+    const existing = await getSubscription(user.id);
+    const keepCurrentAccess = isSubscriptionActive(existing);
+    const expiresAt = existing?.expires_at ?? new Date().toISOString();
+    const { error } = await svc()
+      .from("subscriptions")
+      .upsert(
+        {
+          user_id: user.id,
+          plan_name: "mensal",
+          status: keepCurrentAccess ? existing.status : "pending",
+          expires_at: expiresAt,
+          billing_provider: "asaas",
+          provider_customer_id: customerId,
+          provider_status: providerStatus,
+          cancel_at_period_end: false,
+          canceled_at: null,
+        },
+        { onConflict: "user_id" },
+      );
+    if (error) throw error;
+  }
+
+  return {
+    provider: "asaas" as const,
+    payment_id: paymentId,
+    amount: price,
+    status: providerStatus,
+    access_activated: ["CONFIRMED", "RECEIVED"].includes(providerStatus),
   };
 }
 
@@ -2113,6 +2266,26 @@ app.post(`${P}/billing/pix/create`, async (c) => {
     return c.json(await createAsaasPixPayment(user, cpfCnpj));
   } catch (error: any) {
     return serverError(c, error, "Não foi possível gerar o Pix");
+  }
+});
+
+app.post(`${P}/billing/card/create`, async (c) => {
+  try {
+    const user = await getUser(c.req.header("Authorization"));
+    if (!user) return unauthorized(c);
+
+    const parsed = await readJsonObject(c, 16 * 1024);
+    if (parsed.response) return parsed.response;
+
+    const remoteIp = requesterIp(c);
+    if (!remoteIp) return badRequest(c, "Não foi possível identificar o dispositivo do pagamento");
+
+    return c.json(await createAsaasCardPayment(user, parsed.body, remoteIp));
+  } catch (error: any) {
+    if (error?.name === "BillingClientError") {
+      return badRequest(c, error?.message || "Pagamento não autorizado");
+    }
+    return serverError(c, error, "Não foi possível processar o cartão");
   }
 });
 
