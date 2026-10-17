@@ -37,6 +37,9 @@ import {
   Target,
   BarChart3,
   TrendingDown,
+  Copy,
+  QrCode,
+  LockKeyhole,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import * as API from "../lib/api";
@@ -449,6 +452,192 @@ function Logo({
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
+
+function maskCpfCnpj(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 14);
+  if (digits.length <= 11) {
+    return digits
+      .replace(/(\d{3})(\d)/, "$1.$2")
+      .replace(/(\d{3})(\d)/, "$1.$2")
+      .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
+  }
+  return digits
+    .replace(/^(\d{2})(\d)/, "$1.$2")
+    .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
+    .replace(/\.(\d{3})(\d)/, ".$1/$2")
+    .replace(/(\d{4})(\d{1,2})$/, "$1-$2");
+}
+
+function PixPaymentScreen({
+  data,
+  loading,
+  error,
+  cpfCnpj,
+  onCpfCnpjChange,
+  onGenerate,
+  onClose,
+}: {
+  data: API.PixPaymentResponse | null;
+  loading: boolean;
+  error: string | null;
+  cpfCnpj: string;
+  onCpfCnpjChange: (value: string) => void;
+  onGenerate: (cpfCnpj?: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const qrReady = Boolean(data?.payment_id && data?.encoded_image && data?.payload);
+
+  async function copyPix() {
+    if (!data?.payload) return;
+    try {
+      await navigator.clipboard.writeText(data.payload);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-[#05070A] text-foreground relative overflow-hidden px-4 py-6 sm:py-10">
+      <div className="fixed left-[-260px] top-[-120px] w-[620px] h-[620px] rounded-full bg-red-500/10 blur-[200px] pointer-events-none" />
+      <div className="fixed right-[-260px] bottom-[-120px] w-[620px] h-[620px] rounded-full bg-red-500/10 blur-[200px] pointer-events-none" />
+
+      <div className="relative z-10 max-w-md mx-auto">
+        <Logo size="sm" />
+
+        <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground mb-4">
+          <LockKeyhole size={13} className="text-emerald-400" />
+          Pagamento seguro dentro da Vortan
+        </div>
+
+        <Card className="p-5 sm:p-6 hover:translate-y-0">
+          <div className="flex items-start justify-between gap-4 mb-5">
+            <div>
+              <p className="text-xs uppercase tracking-[0.18em] text-red-400 font-semibold mb-1">
+                Vortan Oficina
+              </p>
+              <h1 className="font-heading font-bold text-2xl text-foreground">
+                Pagamento via Pix
+              </h1>
+              <p className="text-sm text-muted-foreground mt-1">
+                Acesso completo por 1 mês após a confirmação.
+              </p>
+            </div>
+            <div className="w-11 h-11 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center shrink-0">
+              <QrCode size={22} className="text-red-400" />
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border bg-black/20 px-4 py-3 flex items-center justify-between mb-5">
+            <span className="text-sm text-muted-foreground">Total</span>
+            <span className="font-heading text-xl font-bold text-foreground">
+              {typeof data?.amount === "number"
+                ? data.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+                : "R$ 29,90"}
+            </span>
+          </div>
+
+          {loading && !qrReady && (
+            <div className="py-12 flex flex-col items-center text-center">
+              <RefreshCw size={28} className="animate-spin text-red-400 mb-3" />
+              <p className="font-medium">Gerando seu Pix...</p>
+              <p className="text-xs text-muted-foreground mt-1">Isso leva só alguns segundos.</p>
+            </div>
+          )}
+
+          {!loading && data?.requires_cpf_cnpj && !qrReady && (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-amber-500/15 bg-amber-500/5 px-3.5 py-3 text-xs text-muted-foreground leading-relaxed">
+                O Asaas exige CPF ou CNPJ para identificar o pagador. A Vortan usa esse dado somente para gerar a cobrança e não o salva no banco da Vortan.
+              </div>
+              <Input
+                label="CPF ou CNPJ do pagador"
+                value={cpfCnpj}
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="000.000.000-00"
+                onChange={(e) => onCpfCnpjChange(maskCpfCnpj(e.target.value))}
+              />
+              <Btn
+                variant="primary"
+                className="w-full justify-center"
+                loading={loading}
+                disabled={cpfCnpj.replace(/\D/g, "").length !== 11 && cpfCnpj.replace(/\D/g, "").length !== 14}
+                onClick={() => void onGenerate(cpfCnpj)}
+              >
+                Gerar Pix
+              </Btn>
+            </div>
+          )}
+
+          {qrReady && (
+            <div className="space-y-4">
+              <div className="bg-white rounded-2xl p-4 w-[230px] h-[230px] mx-auto flex items-center justify-center shadow-[0_12px_40px_rgba(0,0,0,0.35)]">
+                <img
+                  src={data?.encoded_image?.startsWith("data:") ? data.encoded_image : `data:image/png;base64,${data?.encoded_image}`}
+                  alt="QR Code Pix Vortan"
+                  className="w-full h-full object-contain"
+                />
+              </div>
+
+              <div className="text-center">
+                <p className="text-sm font-semibold text-foreground">Escaneie o QR Code</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  ou use o Pix Copia e Cola abaixo.
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-border bg-black/25 p-3">
+                <p className="text-[11px] text-muted-foreground mb-2 uppercase tracking-wider">Pix Copia e Cola</p>
+                <p className="font-mono text-xs text-foreground/80 break-all line-clamp-3">
+                  {data?.payload}
+                </p>
+              </div>
+
+              <Btn variant="primary" className="w-full justify-center" onClick={() => void copyPix()}>
+                {copied ? <CheckCircle size={16} /> : <Copy size={16} />}
+                {copied ? "Código Pix copiado" : "Copiar código Pix"}
+              </Btn>
+
+              <div className="flex items-center justify-center gap-2 text-xs text-amber-300/90 pt-1">
+                <RefreshCw size={13} className="animate-spin" />
+                Aguardando confirmação do pagamento...
+              </div>
+
+              {data?.expiration_date && (
+                <p className="text-[11px] text-center text-muted-foreground">
+                  QR Code válido até {new Date(data.expiration_date).toLocaleString("pt-BR")}.
+                </p>
+              )}
+            </div>
+          )}
+
+          {error && (
+            <div className="mt-4 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2.5 text-sm text-destructive flex gap-2 items-start">
+              <AlertCircle size={15} className="shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <div className="mt-5 pt-4 border-t border-border flex flex-col items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Voltar para as opções de pagamento
+            </button>
+            <p className="text-[10px] text-muted-foreground/70 text-center leading-relaxed max-w-sm">
+              A confirmação é automática. O nome legal do recebedor pode aparecer no aplicativo do seu banco durante o Pix.
+            </p>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
 
 function AuthError({ msg }: { msg: string }) {
   if (!msg) return null;
@@ -7366,6 +7555,11 @@ export default function App() {
   const [paymentRedirecting, setPaymentRedirecting] = useState<
     "subscription" | "single" | null
   >(null);
+  const [pixPaymentOpen, setPixPaymentOpen] = useState(false);
+  const [pixPayment, setPixPayment] = useState<API.PixPaymentResponse | null>(null);
+  const [pixCpfCnpj, setPixCpfCnpj] = useState("");
+  const [pixLoading, setPixLoading] = useState(false);
+  const [pixError, setPixError] = useState<string | null>(null);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -7669,6 +7863,64 @@ export default function App() {
     setFinancialEntries(fins);
   }, []);
 
+  const generatePixPayment = useCallback(async (cpfCnpj?: string) => {
+    setPixLoading(true);
+    setPixError(null);
+    try {
+      const data = await API.createPixPayment(cpfCnpj?.replace(/\D/g, ""));
+      setPixPayment(data);
+    } catch (error: any) {
+      setPixError(error?.message || "Não foi possível gerar o Pix.");
+    } finally {
+      setPixLoading(false);
+    }
+  }, []);
+
+  const openPixPayment = useCallback(() => {
+    setPixPaymentOpen(true);
+    setPixError(null);
+    if (!pixPayment) void generatePixPayment();
+  }, [pixPayment, generatePixPayment]);
+
+  useEffect(() => {
+    if (!pixPaymentOpen || !pixPayment?.payment_id || !session) return;
+
+    let cancelled = false;
+    let checking = false;
+
+    const checkPayment = async () => {
+      if (checking || cancelled) return;
+      checking = true;
+      try {
+        const updated = await API.getProfile();
+        if (cancelled || !updated) return;
+        setProfile(updated);
+        if (isPaid(updated)) {
+          setPixPaymentOpen(false);
+          setPixPayment(null);
+          setPixCpfCnpj("");
+          setPage("dashboard");
+          try {
+            await loadAll();
+          } catch (loadAfterPaymentError) {
+            console.warn("Acesso liberado, mas os dados serão recarregados depois:", loadAfterPaymentError);
+          }
+        }
+      } catch (error) {
+        console.warn("Falha temporária ao verificar o Pix:", error);
+      } finally {
+        checking = false;
+      }
+    };
+
+    void checkPayment();
+    const timer = window.setInterval(() => void checkPayment(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pixPaymentOpen, pixPayment?.payment_id, session, loadAll]);
+
   const loadFinancialEntries = useCallback(async () => {
     const data = await API.getFinancialEntries();
     setFinancialEntries(data);
@@ -7895,6 +8147,20 @@ export default function App() {
     );
   }
 
+  if (pixPaymentOpen && profile && !isPaid(profile)) {
+    return (
+      <PixPaymentScreen
+        data={pixPayment}
+        loading={pixLoading}
+        error={pixError}
+        cpfCnpj={pixCpfCnpj}
+        onCpfCnpjChange={setPixCpfCnpj}
+        onGenerate={generatePixPayment}
+        onClose={() => setPixPaymentOpen(false)}
+      />
+    );
+  }
+
   if (!profile || !isPaid(profile)) {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4">
@@ -7935,6 +8201,15 @@ export default function App() {
             <Btn
               variant="primary"
               className="w-full justify-center mt-3"
+              onClick={openPixPayment}
+            >
+              <QrCode size={16} />
+              Pagar 1 mês via Pix
+            </Btn>
+
+            <Btn
+              variant="secondary"
+              className="w-full justify-center mt-3"
               loading={paymentRedirecting === "single"}
               onClick={async () => {
                 setPaymentRedirecting("single");
@@ -7945,12 +8220,12 @@ export default function App() {
                   }
                   window.location.href = data.checkout_url;
                 } catch (error: any) {
-                  alert(error?.message || "Não foi possível abrir o pagamento.");
+                  alert(error?.message || "Não foi possível abrir o pagamento no cartão.");
                   setPaymentRedirecting(null);
                 }
               }}
             >
-              {paymentRedirecting !== "single" ? "Pagar apenas este mês" : null}
+              {paymentRedirecting !== "single" ? "Pagar 1 mês no cartão" : null}
             </Btn>
 
             <Btn
