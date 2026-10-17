@@ -1625,10 +1625,24 @@ app.post(`${P}/billing/create-subscription`, async (c) => {
       }),
     });
 
-    const data = await response.json().catch(() => null);
+    const raw = await response.text();
+
+    let data: any = null;
+
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = { raw };
+    }
+
     if (!response.ok) {
       return c.json(
-        { error: "Erro ao criar assinatura recorrente" },
+        {
+          error: data?.message ?? "Erro ao criar assinatura recorrente",
+          status: response.status,
+          statusText: response.statusText,
+          details: data,
+        },
         502,
       );
     }
@@ -1837,6 +1851,7 @@ app.post(`${P}/billing/cancel-subscription`, async (c) => {
 });
 
 Deno.serve(app.fetch);
+
 
 
 

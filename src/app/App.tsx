@@ -38,6 +38,7 @@ import {
   BarChart3,
   TrendingDown,
 } from "lucide-react";
+import { CardPayment, initMercadoPago } from "@mercadopago/sdk-react";
 import { supabase } from "../lib/supabase";
 import * as API from "../lib/api";
 import type {
@@ -52,6 +53,14 @@ import jsPDF from "jspdf";
 import { useLocation, useNavigate } from "react-router-dom";
 import AdminPage from "../pages/AdminPage";
 import { generateBudgetPDF, generateOrderPDF } from "../Utils/pdfGenerator";
+
+const MERCADOPAGO_PUBLIC_KEY = import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY as
+  | string
+  | undefined;
+
+if (MERCADOPAGO_PUBLIC_KEY) {
+  initMercadoPago(MERCADOPAGO_PUBLIC_KEY);
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -394,6 +403,102 @@ function Modal({
         <div className="p-5">{children}</div>
       </div>
     </div>
+  );
+}
+
+
+function SubscriptionPaymentModal({
+  onClose,
+  onSuccess,
+}: {
+  onClose: () => void;
+  onSuccess: () => Promise<void> | void;
+}) {
+  const [paymentError, setPaymentError] = useState("");
+
+  return (
+    <Modal title="Assinar plano mensal" onClose={onClose}>
+      <div className="space-y-4">
+        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+          <div className="text-sm text-muted-foreground">Plano Fundadores</div>
+          <div className="mt-1 text-2xl font-bold text-foreground">
+            R$ 29,90{" "}
+            <span className="text-sm font-normal text-muted-foreground">/mês</span>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Cobrança recorrente mensal no cartão, processada pelo Mercado Pago.
+          </p>
+        </div>
+
+        {!MERCADOPAGO_PUBLIC_KEY ? (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            Chave pública do Mercado Pago não configurada.
+          </div>
+        ) : (
+          <CardPayment
+            initialization={{ amount: 29.9 }}
+            onSubmit={async (formData: any) => {
+              setPaymentError("");
+
+              try {
+                const cardTokenId = String(formData?.token ?? "").trim();
+
+                if (!cardTokenId) {
+                  throw new Error("Mercado Pago não retornou o token do cartão.");
+                }
+
+                const currentSession = (await supabase.auth.getSession()).data.session;
+
+                if (!currentSession) {
+                  throw new Error("Sessão expirada. Faça login novamente.");
+                }
+
+                const res = await fetch(
+                  "https://kddlzartfawqjnrafzdb.supabase.co/functions/v1/rapid-action/billing/create-subscription",
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      Authorization: `Bearer ${currentSession.access_token}`,
+                    },
+                    body: JSON.stringify({
+                      card_token_id: cardTokenId,
+                    }),
+                  },
+                );
+
+                const data = await res.json().catch(() => ({}));
+
+                if (!res.ok) {
+                  throw new Error(
+                    data?.error || "Não foi possível criar a assinatura.",
+                  );
+                }
+
+                await onSuccess();
+              } catch (error: any) {
+                const message =
+                  error?.message || "Não foi possível concluir a assinatura.";
+                setPaymentError(message);
+                throw error;
+              }
+            }}
+            onError={(error: any) => {
+              console.error("Mercado Pago CardPayment:", error);
+              setPaymentError(
+                "Não foi possível carregar ou validar o cartão. Confira os dados e tente novamente.",
+              );
+            }}
+          />
+        )}
+
+        {paymentError && (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {paymentError}
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -7387,7 +7492,9 @@ export default function App() {
     [],
   );
   const [dataLoaded, setDataLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [checkingPayment, setCheckingPayment] = useState(false);
+  const [subscriptionPaymentOpen, setSubscriptionPaymentOpen] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -7511,30 +7618,72 @@ export default function App() {
   useEffect(() => {
     if (!session) {
       setDataLoaded(false);
+      setLoadError(null);
       setProfile(null);
       setClients([]);
       setVehicles([]);
+      setOrders([]);
       setFinancialEntries([]);
 
       /*setNeedsOnboarding(false);*/
       return;
     }
 
-    async function init() {
-      const [prof, cls, vehs, ords, fins] = await Promise.allSettled([
-        API.getProfile(),
-        API.getClients(),
-        API.getVehicles(),
-        API.getOrders(),
-        API.getFinancialEntries(),
-      ]);
+    let cancelled = false;
 
-      let p = prof.status === "fulfilled" ? prof.value : null;
+    async function getProfileWithRetry(): Promise<Profile | null> {
+      let lastError: unknown = null;
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          return await API.getProfile();
+        } catch (error) {
+          lastError = error;
+
+          if (attempt < 2) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, 350 * (attempt + 1)),
+            );
+          }
+        }
+      }
+
+      throw lastError instanceof Error
+        ? lastError
+        : new Error("Não foi possível carregar o perfil.");
+    }
+
+    async function init() {
+      setDataLoaded(false);
+      setLoadError(null);
+
+      let p: Profile | null;
+
+      try {
+        p = await getProfileWithRetry();
+      } catch (error) {
+        console.error("Falha ao carregar perfil:", error);
+
+        if (!cancelled) {
+          setProfile(null);
+          setLoadError(
+            "Não foi possível carregar sua conta agora. Tente novamente.",
+          );
+          setDataLoaded(true);
+        }
+
+        return;
+      }
+
       const pendingProfileRaw = localStorage.getItem(
         "vortanoficina_pending_profile",
       );
 
-      let pendingProfile: { owner_name?: string; workshop_name?: string } | null = null;
+      let pendingProfile: {
+        owner_name?: string;
+        workshop_name?: string;
+      } | null = null;
+
       if (pendingProfileRaw) {
         try {
           pendingProfile = JSON.parse(pendingProfileRaw);
@@ -7545,9 +7694,7 @@ export default function App() {
 
       const metadata = session.user.user_metadata ?? {};
       const shouldInitializeTrial =
-        !p ||
-        Boolean(pendingProfile) ||
-        p.subscription_status === "pending";
+        !p || Boolean(pendingProfile) || p.subscription_status === "pending";
 
       if (shouldInitializeTrial) {
         try {
@@ -7572,21 +7719,41 @@ export default function App() {
           });
           localStorage.removeItem("vortanoficina_pending_profile");
         } catch (profileError) {
-          console.error("Não foi possível concluir o perfil inicial:", profileError);
+          console.error(
+            "Não foi possível concluir o perfil inicial:",
+            profileError,
+          );
         }
       }
 
       if (!p) {
-        console.warn("Perfil não encontrado ou falhou ao carregar.");
+        console.warn("Perfil não encontrado.");
 
-        setProfile(null);
-        setDataLoaded(true);
+        if (!cancelled) {
+          setProfile(null);
+          setLoadError(
+            "Não foi possível carregar seu perfil. Tente novamente.",
+          );
+          setDataLoaded(true);
+        }
 
-        // NÃO deslogar automaticamente aqui
         return;
-      } else {
-        setProfile(p);
       }
+
+      if (cancelled) return;
+
+      // O perfil é a fonte de verdade para acesso. Só depois dele carregar
+      // buscamos os demais dados, evitando tratar falha de rede como assinatura.
+      setProfile(p);
+
+      const [cls, vehs, ords, fins] = await Promise.allSettled([
+        API.getClients(),
+        API.getVehicles(),
+        API.getOrders(),
+        API.getFinancialEntries(),
+      ]);
+
+      if (cancelled) return;
 
       setClients(cls.status === "fulfilled" ? cls.value : []);
       setVehicles(vehs.status === "fulfilled" ? vehs.value : []);
@@ -7595,7 +7762,11 @@ export default function App() {
       setDataLoaded(true);
     }
 
-    init();
+    void init();
+
+    return () => {
+      cancelled = true;
+    };
   }, [session]);
 
   const loadClients = useCallback(async () => {
@@ -7829,6 +8000,30 @@ export default function App() {
 */
   if (!dataLoaded) return <LoadingScreen />;
 
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4">
+        <div className="w-full max-w-sm text-center">
+          <Logo />
+          <Card className="p-6 mt-6">
+            <AlertCircle size={28} className="text-destructive mx-auto mb-3" />
+            <h1 className="font-heading font-bold text-xl text-foreground mb-2">
+              Não foi possível carregar sua conta
+            </h1>
+            <p className="text-sm text-muted-foreground mb-5">{loadError}</p>
+            <Btn
+              variant="primary"
+              className="w-full justify-center"
+              onClick={() => window.location.reload()}
+            >
+              Tentar novamente
+            </Btn>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   if (!profile || !isPaid(profile)) {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4">
@@ -7892,48 +8087,7 @@ export default function App() {
             <Btn
               variant="primary"
               className="w-full justify-center"
-              onClick={async () => {
-                try {
-                  const session = (await supabase.auth.getSession()).data
-                    .session;
-
-                  if (!session) {
-                    alert("Sessão expirada. Faça login novamente.");
-                    return;
-                  }
-
-                  const res = await fetch(
-                    "https://kddlzartfawqjnrafzdb.supabase.co/functions/v1/rapid-action/billing/create-subscription",
-                    {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${session.access_token}`,
-                      },
-                    },
-                  );
-
-                  const data = await res.json();
-
-                  if (!res.ok) {
-                    alert(
-                      data?.error || "Não foi possível criar a assinatura.",
-                    );
-                    return;
-                  }
-
-                  const url = data?.init_point || data?.url;
-
-                  if (!url) {
-                    alert("Mercado Pago não retornou o link da assinatura.");
-                    return;
-                  }
-
-                  window.open(url, "_blank", "noopener,noreferrer");
-                } catch {
-                  alert("Erro ao conectar com o Mercado Pago.");
-                }
-              }}
+              onClick={() => setSubscriptionPaymentOpen(true)}
             >
               Assinar plano mensal
             </Btn>
@@ -8019,6 +8173,32 @@ export default function App() {
             </Btn>
           </Card>
         </div>
+
+        {subscriptionPaymentOpen && (
+          <SubscriptionPaymentModal
+            onClose={() => setSubscriptionPaymentOpen(false)}
+            onSuccess={async () => {
+              setSubscriptionPaymentOpen(false);
+              alert(
+                "Assinatura criada. Aguarde a confirmação do primeiro pagamento.",
+              );
+
+              await new Promise((resolve) => setTimeout(resolve, 1800));
+
+              try {
+                const updated = await API.getProfile();
+                setProfile(updated);
+
+                if (isPaid(updated)) {
+                  setPage("dashboard");
+                  await loadAll();
+                }
+              } catch {
+                // O botão "Já paguei, atualizar acesso" continua disponível.
+              }
+            }}
+          />
+        )}
       </div>
     );
   }
