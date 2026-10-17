@@ -38,7 +38,6 @@ import {
   BarChart3,
   TrendingDown,
 } from "lucide-react";
-import { CardPayment, initMercadoPago } from "@mercadopago/sdk-react";
 import { supabase } from "../lib/supabase";
 import * as API from "../lib/api";
 import type {
@@ -53,14 +52,6 @@ import jsPDF from "jspdf";
 import { useLocation, useNavigate } from "react-router-dom";
 import AdminPage from "../pages/AdminPage";
 import { generateBudgetPDF, generateOrderPDF } from "../Utils/pdfGenerator";
-
-const MERCADOPAGO_PUBLIC_KEY = import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY as
-  | string
-  | undefined;
-
-if (MERCADOPAGO_PUBLIC_KEY) {
-  initMercadoPago(MERCADOPAGO_PUBLIC_KEY);
-}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -403,102 +394,6 @@ function Modal({
         <div className="p-5">{children}</div>
       </div>
     </div>
-  );
-}
-
-
-function SubscriptionPaymentModal({
-  onClose,
-  onSuccess,
-}: {
-  onClose: () => void;
-  onSuccess: () => Promise<void> | void;
-}) {
-  const [paymentError, setPaymentError] = useState("");
-
-  return (
-    <Modal title="Assinar plano mensal" onClose={onClose}>
-      <div className="space-y-4">
-        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
-          <div className="text-sm text-muted-foreground">Plano Fundadores</div>
-          <div className="mt-1 text-2xl font-bold text-foreground">
-            R$ 29,90{" "}
-            <span className="text-sm font-normal text-muted-foreground">/mês</span>
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Cobrança recorrente mensal no cartão, processada pelo Mercado Pago.
-          </p>
-        </div>
-
-        {!MERCADOPAGO_PUBLIC_KEY ? (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-            Chave pública do Mercado Pago não configurada.
-          </div>
-        ) : (
-          <CardPayment
-            initialization={{ amount: 29.9 }}
-            onSubmit={async (formData: any) => {
-              setPaymentError("");
-
-              try {
-                const cardTokenId = String(formData?.token ?? "").trim();
-
-                if (!cardTokenId) {
-                  throw new Error("Mercado Pago não retornou o token do cartão.");
-                }
-
-                const currentSession = (await supabase.auth.getSession()).data.session;
-
-                if (!currentSession) {
-                  throw new Error("Sessão expirada. Faça login novamente.");
-                }
-
-                const res = await fetch(
-                  "https://kddlzartfawqjnrafzdb.supabase.co/functions/v1/rapid-action/billing/create-subscription",
-                  {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/json",
-                      Authorization: `Bearer ${currentSession.access_token}`,
-                    },
-                    body: JSON.stringify({
-                      card_token_id: cardTokenId,
-                    }),
-                  },
-                );
-
-                const data = await res.json().catch(() => ({}));
-
-                if (!res.ok) {
-                  throw new Error(
-                    data?.error || "Não foi possível criar a assinatura.",
-                  );
-                }
-
-                await onSuccess();
-              } catch (error: any) {
-                const message =
-                  error?.message || "Não foi possível concluir a assinatura.";
-                setPaymentError(message);
-                throw error;
-              }
-            }}
-            onError={(error: any) => {
-              console.error("Mercado Pago CardPayment:", error);
-              setPaymentError(
-                "Não foi possível carregar ou validar o cartão. Confira os dados e tente novamente.",
-              );
-            }}
-          />
-        )}
-
-        {paymentError && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-            {paymentError}
-          </div>
-        )}
-      </div>
-    </Modal>
   );
 }
 
@@ -6604,41 +6499,15 @@ function SettingsPage({ profile }: { profile: Profile | null }) {
     if (!confirmCancel) return;
 
     try {
-      const session = (await supabase.auth.getSession()).data.session;
-
-      if (!session) {
-        alert("Sessão expirada. Faça login novamente.");
-        return;
-      }
-
-      const res = await fetch(
-        "https://kddlzartfawqjnrafzdb.supabase.co/functions/v1/rapid-action/billing/cancel-subscription",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-        },
-      );
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        if (res.status === 404) {
-          alert(
-            "Você não possui uma assinatura mensal recorrente para cancelar.",
-          );
-          return;
-        }
-
-        alert(data?.error || "Erro ao cancelar assinatura.");
-        return;
-      }
-
+      const data = await API.cancelSubscription();
       alert(data.message || "Assinatura cancelada com sucesso.");
-    } catch {
-      alert("Erro ao cancelar assinatura.");
+    } catch (error: any) {
+      const message = String(error?.message ?? "");
+      if (message.toLowerCase().includes("não encontrada")) {
+        alert("Você não possui uma assinatura mensal recorrente para cancelar.");
+        return;
+      }
+      alert(message || "Erro ao cancelar assinatura.");
     }
   }
 
@@ -7494,7 +7363,9 @@ export default function App() {
   const [dataLoaded, setDataLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [checkingPayment, setCheckingPayment] = useState(false);
-  const [subscriptionPaymentOpen, setSubscriptionPaymentOpen] = useState(false);
+  const [paymentRedirecting, setPaymentRedirecting] = useState<
+    "subscription" | "single" | null
+  >(null);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -8040,102 +7911,46 @@ export default function App() {
               assinatura.
             </p>
 
-            {/* <Btn
-    variant="primary"
-    className="w-full justify-center"
-    onClick={async () => {
-      try {
-        const session = (await supabase.auth.getSession()).data.session;
-
-        if (!session) {
-          alert("Sessão expirada. Faça login novamente.");
-          return;
-        }
-
-        const res = await fetch(
-          "https://kddlzartfawqjnrafzdb.supabase.co/functions/v1/rapid-action/billing/create-checkout",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${session.access_token}`,
-            },
-          }
-        );
-
-        if (!res.ok) {
-          alert("Não foi possível gerar o pagamento agora.");
-          return;
-        }
-
-        const data = await res.json();
-        const checkoutUrl = data?.checkout_url || data?.init_point || data?.url;
-
-        if (checkoutUrl) {
-          window.open(checkoutUrl, "_blank", "noopener,noreferrer");
-        } else {
-          alert("Checkout não retornou link.");
-        }
-      } catch {
-        alert("Erro ao conectar com pagamento.");
-      }
-    }}
-  >
-    Assinar agora
-  </Btn> */}
-
             <Btn
               variant="primary"
               className="w-full justify-center"
-              onClick={() => setSubscriptionPaymentOpen(true)}
+              loading={paymentRedirecting === "subscription"}
+              onClick={async () => {
+                setPaymentRedirecting("subscription");
+                try {
+                  const data = await API.createSubscriptionCheckout();
+                  if (!data.checkout_url) {
+                    throw new Error("O Asaas não retornou o link de pagamento.");
+                  }
+                  window.location.href = data.checkout_url;
+                } catch (error: any) {
+                  alert(error?.message || "Não foi possível abrir o pagamento recorrente.");
+                  setPaymentRedirecting(null);
+                }
+              }}
             >
-              Assinar plano mensal
+              {paymentRedirecting !== "subscription" ? "Assinar plano mensal" : null}
             </Btn>
 
             <Btn
               variant="primary"
               className="w-full justify-center mt-3"
+              loading={paymentRedirecting === "single"}
               onClick={async () => {
+                setPaymentRedirecting("single");
                 try {
-                  const session = (await supabase.auth.getSession()).data
-                    .session;
-
-                  if (!session) {
-                    alert("Sessão expirada. Faça login novamente.");
-                    return;
+                  const data = await API.createCheckout();
+                  if (!data.checkout_url) {
+                    throw new Error("O Asaas não retornou o link de pagamento.");
                   }
-
-                  const res = await fetch(
-                    "https://kddlzartfawqjnrafzdb.supabase.co/functions/v1/rapid-action/billing/create-checkout",
-                    {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${session.access_token}`,
-                      },
-                    },
-                  );
-
-                  if (!res.ok) {
-                    alert("Não foi possível gerar o pagamento agora.");
-                    return;
-                  }
-
-                  const data = await res.json();
-                  const checkoutUrl =
-                    data?.checkout_url || data?.init_point || data?.url;
-
-                  if (checkoutUrl) {
-                    window.open(checkoutUrl, "_blank", "noopener,noreferrer");
-                  } else {
-                    alert("Checkout não retornou link.");
-                  }
-                } catch {
-                  alert("Erro ao conectar com pagamento.");
+                  window.location.href = data.checkout_url;
+                } catch (error: any) {
+                  alert(error?.message || "Não foi possível abrir o pagamento.");
+                  setPaymentRedirecting(null);
                 }
               }}
             >
-              Pagar apenas este mês
+              {paymentRedirecting !== "single" ? "Pagar apenas este mês" : null}
             </Btn>
 
             <Btn
@@ -8174,31 +7989,6 @@ export default function App() {
           </Card>
         </div>
 
-        {subscriptionPaymentOpen && (
-          <SubscriptionPaymentModal
-            onClose={() => setSubscriptionPaymentOpen(false)}
-            onSuccess={async () => {
-              setSubscriptionPaymentOpen(false);
-              alert(
-                "Assinatura criada. Aguarde a confirmação do primeiro pagamento.",
-              );
-
-              await new Promise((resolve) => setTimeout(resolve, 1800));
-
-              try {
-                const updated = await API.getProfile();
-                setProfile(updated);
-
-                if (isPaid(updated)) {
-                  setPage("dashboard");
-                  await loadAll();
-                }
-              } catch {
-                // O botão "Já paguei, atualizar acesso" continua disponível.
-              }
-            }}
-          />
-        )}
       </div>
     );
   }
