@@ -255,6 +255,26 @@ export interface BillingCheckoutResponse {
   provider: "asaas";
 }
 
+export interface PixPaymentResponse {
+  provider: "asaas";
+  requires_cpf_cnpj: boolean;
+  payment_id?: string;
+  amount?: number;
+  status?: string;
+  encoded_image?: string;
+  payload?: string;
+  expiration_date?: string | null;
+}
+
+export async function createPixPayment(
+  cpfCnpj?: string,
+): Promise<PixPaymentResponse> {
+  return apiFetch<PixPaymentResponse>("/billing/pix/create", {
+    method: "POST",
+    body: JSON.stringify(cpfCnpj ? { cpfCnpj } : {}),
+  });
+}
+
 export async function createCheckout(): Promise<BillingCheckoutResponse> {
   return apiFetch<BillingCheckoutResponse>("/billing/create-checkout", {
     method: "POST",

@@ -1195,6 +1195,49 @@ function formatAsaasDateTime(date = new Date()) {
   return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
 }
 
+function formatAsaasDate(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function onlyDigits(value: unknown) {
+  return String(value ?? "").replace(/\D/g, "");
+}
+
+function isValidCpf(value: string) {
+  if (!/^\d{11}$/.test(value) || /^(\d)\1{10}$/.test(value)) return false;
+  const calc = (length: number) => {
+    let sum = 0;
+    for (let i = 0; i < length; i += 1) sum += Number(value[i]) * (length + 1 - i);
+    const mod = (sum * 10) % 11;
+    return mod === 10 ? 0 : mod;
+  };
+  return calc(9) === Number(value[9]) && calc(10) === Number(value[10]);
+}
+
+function isValidCnpj(value: string) {
+  if (!/^\d{14}$/.test(value) || /^(\d)\1{13}$/.test(value)) return false;
+  const digit = (base: string, weights: number[]) => {
+    const sum = base.split("").reduce((acc, n, i) => acc + Number(n) * weights[i], 0);
+    const mod = sum % 11;
+    return mod < 2 ? 0 : 11 - mod;
+  };
+  const base = value.slice(0, 12);
+  const first = digit(base, [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  const second = digit(`${base}${first}`, [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  return value === `${base}${first}${second}`;
+}
+
+function isValidCpfCnpj(value: string) {
+  return isValidCpf(value) || isValidCnpj(value);
+}
+
 async function getAsaasCustomer(customerId: string) {
   const { response, data } = await asaasRequest(`/customers/${encodeURIComponent(customerId)}`);
   if (response.status === 404) return null;
@@ -1204,6 +1247,150 @@ async function getAsaasCustomer(customerId: string) {
     );
   }
   return data;
+}
+
+async function findAsaasCustomerByExternalReference(userId: string) {
+  const query = new URLSearchParams({ externalReference: userId, limit: "1" });
+  const { response, data } = await asaasRequest(`/customers?${query.toString()}`);
+  if (!response.ok) {
+    throw new Error(
+      data?.errors?.[0]?.description ?? data?.message ?? "Erro ao localizar cliente no Asaas",
+    );
+  }
+  const customer = Array.isArray(data?.data) ? data.data[0] : null;
+  return customer?.id ? customer : null;
+}
+
+async function getPixCustomerForUser(user: any, cpfCnpj?: string) {
+  const existing = await getSubscription(user.id);
+  const latestCheckout = await getLatestAsaasCheckoutSession(user.id);
+  const candidates = [
+    String(existing?.provider_customer_id ?? "").trim(),
+    String(latestCheckout?.customer_id ?? "").trim(),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const customer = await getAsaasCustomer(candidate);
+    if (customer?.id) return String(customer.id);
+  }
+
+  const byReference = await findAsaasCustomerByExternalReference(user.id);
+  if (byReference?.id) return String(byReference.id);
+
+  const document = onlyDigits(cpfCnpj);
+  if (!document) return null;
+  if (!isValidCpfCnpj(document)) throw new Error("CPF/CNPJ inválido");
+
+  const { data: profile, error: profileError } = await svc()
+    .from("af_profiles")
+    .select("owner_name, workshop_name, phone, whatsapp")
+    .eq("id", user.id)
+    .maybeSingle();
+  if (profileError) throw profileError;
+
+  const name =
+    String(profile?.owner_name ?? "").trim() ||
+    String(profile?.workshop_name ?? "").trim() ||
+    String(user.email ?? "").split("@")[0] ||
+    "Cliente Vortan";
+  const mobilePhone = onlyDigits(profile?.whatsapp || profile?.phone).slice(-11);
+  const payload: Record<string, unknown> = {
+    name: name.slice(0, 120),
+    cpfCnpj: document,
+    externalReference: user.id,
+    notificationDisabled: true,
+  };
+  if (user.email) payload.email = String(user.email).slice(0, 160);
+  if (mobilePhone.length >= 10) payload.mobilePhone = mobilePhone;
+
+  const created = await asaasRequest("/customers", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!created.response.ok || !created.data?.id) {
+    throw new Error(
+      created.data?.errors?.[0]?.description ??
+        created.data?.message ??
+        "Não foi possível cadastrar o pagador no Asaas",
+    );
+  }
+
+  return String(created.data.id);
+}
+
+async function createAsaasPixPayment(user: any, cpfCnpj?: string) {
+  const price = getMonthlyPrice();
+  const customerId = await getPixCustomerForUser(user, cpfCnpj);
+  if (!customerId) {
+    return {
+      provider: "asaas" as const,
+      requires_cpf_cnpj: true,
+      amount: price,
+    };
+  }
+
+  const externalReference = `vortan:single:${user.id}`;
+  const payment = await asaasRequest("/payments", {
+    method: "POST",
+    body: JSON.stringify({
+      customer: customerId,
+      billingType: "PIX",
+      value: price,
+      dueDate: formatAsaasDate(new Date()),
+      description: "Vortan Oficina - acesso por 1 mês",
+      externalReference,
+    }),
+  });
+
+  if (!payment.response.ok || !payment.data?.id) {
+    throw new Error(
+      payment.data?.errors?.[0]?.description ??
+        payment.data?.message ??
+        "Não foi possível gerar a cobrança Pix",
+    );
+  }
+
+  const paymentId = String(payment.data.id);
+  const qr = await asaasRequest(`/payments/${encodeURIComponent(paymentId)}/pixQrCode`);
+  if (!qr.response.ok || !qr.data?.payload || !qr.data?.encodedImage) {
+    throw new Error(
+      qr.data?.errors?.[0]?.description ??
+        qr.data?.message ??
+        "Não foi possível gerar o QR Code Pix",
+    );
+  }
+
+  const existing = await getSubscription(user.id);
+  const keepCurrentAccess = isSubscriptionActive(existing);
+  const expiresAt = existing?.expires_at ?? new Date().toISOString();
+  const { error } = await svc()
+    .from("subscriptions")
+    .upsert(
+      {
+        user_id: user.id,
+        plan_name: "mensal",
+        status: keepCurrentAccess ? existing.status : "pending",
+        expires_at: expiresAt,
+        billing_provider: "asaas",
+        provider_customer_id: customerId,
+        provider_status: "pix_pending",
+        cancel_at_period_end: false,
+        canceled_at: null,
+      },
+      { onConflict: "user_id" },
+    );
+  if (error) throw error;
+
+  return {
+    provider: "asaas" as const,
+    requires_cpf_cnpj: false,
+    payment_id: paymentId,
+    amount: price,
+    status: String(payment.data?.status ?? "PENDING"),
+    encoded_image: String(qr.data.encodedImage),
+    payload: String(qr.data.payload),
+    expiration_date: qr.data?.expirationDate ? String(qr.data.expirationDate) : null,
+  };
 }
 
 function asaasResourceId(value: any) {
@@ -1810,7 +1997,7 @@ async function createAsaasCheckout(user: any, mode: "single" | "subscription") {
   }
 
   const payload: Record<string, unknown> = {
-    billingTypes: recurring ? ["CREDIT_CARD"] : ["PIX", "CREDIT_CARD"],
+    billingTypes: ["CREDIT_CARD"],
     chargeTypes: recurring ? ["RECURRENT"] : ["DETACHED"],
     minutesToExpire: 60,
     externalReference,
@@ -1898,6 +2085,24 @@ async function createAsaasCheckout(user: any, mode: "single" | "subscription") {
     provider: "asaas" as const,
   };
 }
+
+app.post(`${P}/billing/pix/create`, async (c) => {
+  try {
+    const user = await getUser(c.req.header("Authorization"));
+    if (!user) return unauthorized(c);
+
+    const parsed = await readJsonObject(c, 8 * 1024);
+    if (parsed.response) return parsed.response;
+    const cpfCnpj = parsed.body?.cpfCnpj;
+    if (cpfCnpj !== undefined && typeof cpfCnpj !== "string") {
+      return badRequest(c, "CPF/CNPJ inválido");
+    }
+
+    return c.json(await createAsaasPixPayment(user, cpfCnpj));
+  } catch (error: any) {
+    return serverError(c, error, "Não foi possível gerar o Pix");
+  }
+});
 
 app.post(`${P}/billing/create-checkout`, async (c) => {
   try {
