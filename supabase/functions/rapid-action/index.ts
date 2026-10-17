@@ -1,33 +1,29 @@
-﻿import { Hono } from "npm:hono";
+import { Hono } from "npm:hono";
 import { cors } from "npm:hono/cors";
+import { logger } from "npm:hono/logger";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const app = new Hono();
 const P = "/rapid-action";
 
-if (Deno.env.get("VORTAN_DEBUG_REQUESTS") === "true") {
-  app.use("*", async (c, next) => {
-    const started = Date.now();
-    await next();
-    const pathname = new URL(c.req.url).pathname.replace(/\/public\/orders\/[^/]+$/, "/public/orders/[redacted]");
-    console.log(`${c.req.method} ${pathname} ${c.res.status} ${Date.now() - started}ms`);
-  });
-}
+app.use("*", logger());
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://autoflowoficina.online",
+  "https://www.autoflowoficina.online",
+  "https://vortanoficina.com.br",
+  "https://www.vortanoficina.com.br",
+  "https://autoflow-saas-two.vercel.app",
+];
 
 app.use(
   "*",
   cors({
     origin: (origin) => {
-      const allowedOrigins = [
-        "http://localhost:5173",
-        "https://autoflowoficina.online",
-        "https://www.autoflowoficina.online",
-        "https://vortanoficina.com.br",
-        "https://www.vortanoficina.com.br",
-        "https://autoflow-saas-two.vercel.app",
-      ];
-
-      if (allowedOrigins.includes(origin)) return origin;
+      if (allowedOrigins.includes(origin)) {
+        return origin;
+      }
 
       if (/^https:\/\/autoflow-saas-[a-z0-9-]+\.vercel\.app$/.test(origin)) {
         return origin;
@@ -42,86 +38,7 @@ app.use(
 
 app.options("*", (c) => c.text("", 204));
 
-// Security headers: API responses are never meant to be embedded or cached.
-app.use("*", async (c, next) => {
-  await next();
-  c.header("X-Content-Type-Options", "nosniff");
-  c.header("X-Frame-Options", "DENY");
-  c.header("Referrer-Policy", "no-referrer");
-  c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  c.header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
-  c.header("Cache-Control", "no-store, max-age=0");
-  c.header("Pragma", "no-cache");
-  if (new URL(c.req.url).protocol === "https:") {
-    c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  }
-});
-
-type RateBucket = { count: number; resetAt: number };
-const rateBuckets = new Map<string, RateBucket>();
-
-function requesterKey(c: any) {
-  const ip =
-    c.req.header("cf-connecting-ip") ??
-    c.req.header("x-real-ip") ??
-    c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
-  if (ip) return ip;
-  const auth = c.req.header("Authorization") ?? "";
-  return auth ? `auth:${auth.slice(-24)}` : `ua:${(c.req.header("user-agent") ?? "unknown").slice(0, 80)}`;
-}
-
-function checkRateLimit(c: any) {
-  if (c.req.method === "OPTIONS") return null;
-  const path = new URL(c.req.url).pathname;
-  let limit = 600;
-  let scope = "read";
-
-  if (path.includes("/billing/webhook")) {
-    limit = 600;
-    scope = "webhook";
-  } else if (path.includes("/public/orders/")) {
-    limit = 120;
-    scope = "public-order";
-  } else if (path.includes("/billing/")) {
-    limit = 30;
-    scope = "billing";
-  } else if (path.includes("/admin/")) {
-    limit = 120;
-    scope = "admin";
-  } else if (c.req.method !== "GET") {
-    limit = 180;
-    scope = "mutation";
-  }
-
-  const now = Date.now();
-  const key = `${scope}:${requesterKey(c)}`;
-  const existing = rateBuckets.get(key);
-  const bucket = !existing || existing.resetAt <= now
-    ? { count: 0, resetAt: now + 60_000 }
-    : existing;
-  bucket.count += 1;
-  rateBuckets.set(key, bucket);
-
-  if (rateBuckets.size > 5000) {
-    for (const [bucketKey, value] of rateBuckets) {
-      if (value.resetAt <= now) rateBuckets.delete(bucketKey);
-    }
-  }
-
-  if (bucket.count > limit) {
-    c.header("Retry-After", String(Math.max(1, Math.ceil((bucket.resetAt - now) / 1000))));
-    return c.json({ error: "Muitas requisiÃ§Ãµes. Tente novamente em instantes." }, 429);
-  }
-  return null;
-}
-
-app.use("*", async (c, next) => {
-  const limited = checkRateLimit(c);
-  if (limited) return limited;
-  await next();
-});
-
-// â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function svc() {
   return createClient(
@@ -143,53 +60,7 @@ async function getUser(authHeader: string | undefined) {
 
 const unauthorized = (c: any) => c.json({ error: "Unauthorized" }, 401);
 const badRequest = (c: any, msg: string) => c.json({ error: msg }, 400);
-const serverError = (c: any, internal: unknown, publicMessage = "Erro interno do servidor") => {
-  console.error("Vortan API error:", internal);
-  return c.json({ error: publicMessage }, 500);
-};
-
-async function readJsonObject(c: any, maxBytes = 64 * 1024) {
-  const declaredLength = Number(c.req.header("content-length") ?? "0");
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    return { body: null, response: c.json({ error: "RequisiÃ§Ã£o muito grande" }, 413) };
-  }
-
-  try {
-    const body = await c.req.json();
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return { body: null, response: badRequest(c, "JSON invÃ¡lido") };
-    }
-    const size = new TextEncoder().encode(JSON.stringify(body)).byteLength;
-    if (size > maxBytes) {
-      return { body: null, response: c.json({ error: "RequisiÃ§Ã£o muito grande" }, 413) };
-    }
-    return { body, response: null };
-  } catch {
-    return { body: null, response: badRequest(c, "JSON invÃ¡lido") };
-  }
-}
-
-function textValue(value: unknown, maxLength: number, trim = true): string | null {
-  if (value === undefined || value === null) return "";
-  if (typeof value !== "string" && typeof value !== "number") return null;
-  const text = String(value);
-  const normalized = trim ? text.trim() : text;
-  if (normalized.length > maxLength) return null;
-  return normalized;
-}
-
-function finiteAmount(value: unknown, max = 1_000_000_000) {
-  const amount = typeof value === "number" ? value : Number(String(value ?? "").replace(",", "."));
-  if (!Number.isFinite(amount) || amount < 0 || amount > max) return null;
-  return amount;
-}
-
-function safeDateValue(value: unknown) {
-  if (value === undefined || value === null || value === "") return "";
-  if (typeof value !== "string" || value.length > 40) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : value;
-}
+const serverError = (c: any, msg: string) => c.json({ error: msg }, 500);
 
 async function getSubscription(userId: string) {
   const { data, error } = await svc()
@@ -217,7 +88,7 @@ async function requireActiveSubscription(c: any, user: any) {
     .maybeSingle();
 
   if (profileError) {
-    return serverError(c, profileError);
+    return c.json({ error: profileError.message }, 500);
   }
 
   if (profile?.is_admin === true) {
@@ -250,7 +121,7 @@ async function requireAdmin(c: any) {
     .maybeSingle();
 
   if (error) {
-    return { user: null, response: serverError(c, error) };
+    return { user: null, response: serverError(c, error.message) };
   }
 
   if (profile?.is_admin !== true) {
@@ -263,7 +134,7 @@ async function requireAdmin(c: any) {
   return { user, response: null };
 }
 
-// â”€â”€â”€ Admin â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Admin ───────────────────────────────────────────────────────────────────
 
 app.get(`${P}/admin/workshops`, async (c) => {
   const admin = await requireAdmin(c);
@@ -286,7 +157,7 @@ app.get(`${P}/admin/workshops`, async (c) => {
     clientsRes.error ||
     vehiclesRes.error ||
     ordersRes.error;
-  if (firstError) return serverError(c, firstError);
+  if (firstError) return serverError(c, firstError.message);
 
   const countByWorkshop = (rows: any[] | null) =>
     (rows ?? []).reduce<Record<string, number>>((acc, row) => {
@@ -315,11 +186,10 @@ app.post(`${P}/admin/workshops/:id/subscription`, async (c) => {
   if (admin.response) return admin.response;
 
   const targetId = c.req.param("id");
-  if (!isUuid(targetId)) return badRequest(c, "Oficina invÃ¡lida");
-  const parsed = await readJsonObject(c, 8 * 1024);
-  if (parsed.response) return parsed.response;
-  const body = parsed.body;
-  const action = textValue(body.action, 32) ?? "";
+  const body = await c.req.json().catch(() => ({}));
+  const action = String(body?.action ?? "");
+
+  if (!isUuid(targetId)) return badRequest(c, "Oficina inválida");
 
   const { data: targetProfile, error: targetError } = await svc()
     .from("af_profiles")
@@ -327,8 +197,8 @@ app.post(`${P}/admin/workshops/:id/subscription`, async (c) => {
     .eq("id", targetId)
     .maybeSingle();
 
-  if (targetError) return serverError(c, targetError);
-  if (!targetProfile) return c.json({ error: "Oficina nÃ£o encontrada" }, 404);
+  if (targetError) return serverError(c, targetError.message);
+  if (!targetProfile) return c.json({ error: "Oficina não encontrada" }, 404);
 
   const now = new Date();
   let status: "active" | "trial" | "expired";
@@ -363,7 +233,7 @@ app.post(`${P}/admin/workshops/:id/subscription`, async (c) => {
       cancel_at_period_end: false,
     };
   } else {
-    return badRequest(c, "AÃ§Ã£o administrativa invÃ¡lida");
+    return badRequest(c, "Ação administrativa inválida");
   }
 
   try {
@@ -385,19 +255,19 @@ app.post(`${P}/admin/workshops/:id/subscription`, async (c) => {
     .eq("id", targetId)
     .maybeSingle();
 
-  if (error) return serverError(c, error);
-  if (!data) return c.json({ error: "Oficina nÃ£o encontrada" }, 404);
+  if (error) return serverError(c, error.message);
+  if (!data) return c.json({ error: "Oficina não encontrada" }, 404);
 
   return c.json(data);
 });
 
-// â”€â”€â”€ Health â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Health ──────────────────────────────────────────────────────────────────
 
 app.get(`${P}/health`, (c) =>
   c.json({ status: "ok", ts: new Date().toISOString() }),
 );
 
-// â”€â”€â”€ Profile â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Profile ─────────────────────────────────────────────────────────────────
 
 app.get(`${P}/profile`, async (c) => {
   const user = await getUser(c.req.header("Authorization"));
@@ -407,7 +277,7 @@ app.get(`${P}/profile`, async (c) => {
     .select("*")
     .eq("id", user.id)
     .maybeSingle();
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
   return c.json(data);
 });
 
@@ -415,41 +285,28 @@ app.post(`${P}/profile`, async (c) => {
   const user = await getUser(c.req.header("Authorization"));
   if (!user) return unauthorized(c);
 
-  const parsed = await readJsonObject(c);
-  if (parsed.response) return parsed.response;
-  const body = parsed.body;
+  const body = await c.req.json();
 
-  const workshopName = textValue(body.workshop_name, 160);
-  const ownerName = textValue(body.owner_name, 160);
-  const phone = textValue(body.phone, 40);
-  const whatsapp = textValue(body.whatsapp, 40);
-  const instagram = textValue(body.instagram, 120);
-  const address = textValue(body.address, 300);
-  const city = textValue(body.city, 120);
-  const state = textValue(body.state, 40);
-  const logoUrl = textValue(body.logo_url, 4096);
-
-  if (!workshopName) return badRequest(c, "Nome da oficina Ã© obrigatÃ³rio");
-  if ([ownerName, phone, whatsapp, instagram, address, city, state, logoUrl].some((v) => v === null)) {
-    return badRequest(c, "Dados do perfil invÃ¡lidos ou muito longos");
+  if (!body.workshop_name?.trim()) {
+    return badRequest(c, "Nome da oficina é obrigatório");
   }
 
   const { error } = await svc()
     .from("af_profiles")
     .upsert({
       id: user.id,
-      workshop_name: workshopName,
-      owner_name: ownerName,
-      phone,
-      whatsapp,
-      instagram,
-      address,
-      city,
-      state,
-      logo_url: logoUrl,
+      workshop_name: body.workshop_name?.trim() ?? "",
+      owner_name: body.owner_name?.trim() ?? "",
+      phone: body.phone ?? "",
+      whatsapp: body.whatsapp ?? "",
+      instagram: body.instagram ?? "",
+      address: body.address ?? "",
+      city: body.city ?? "",
+      state: body.state ?? "",
+      logo_url: body.logo_url ?? "",
     });
 
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
 
   try {
     await activateTrialAccess({
@@ -457,8 +314,8 @@ app.post(`${P}/profile`, async (c) => {
       email: user.email,
     });
   } catch (trialError) {
-    console.error("Erro ao criar teste grÃ¡tis:", trialError);
-    return serverError(c, "Erro ao ativar teste grÃ¡tis");
+    console.error("Erro ao criar teste grátis:", trialError);
+    return serverError(c, "Erro ao ativar teste grátis");
   }
 
   const { data: updatedProfile, error: profileError } = await svc()
@@ -467,12 +324,12 @@ app.post(`${P}/profile`, async (c) => {
     .eq("id", user.id)
     .single();
 
-  if (profileError) return serverError(c, profileError);
+  if (profileError) return serverError(c, profileError.message);
 
   return c.json(updatedProfile);
 });
 
-// â”€â”€â”€ Clients â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Clients ─────────────────────────────────────────────────────────────────
 
 app.get(`${P}/clients`, async (c) => {
   const user = await getUser(c.req.header("Authorization"));
@@ -485,7 +342,7 @@ app.get(`${P}/clients`, async (c) => {
     .select("*")
     .eq("workshop_id", user.id)
     .order("created_at", { ascending: false });
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
   return c.json(data ?? []);
 });
 
@@ -495,25 +352,19 @@ app.post(`${P}/clients`, async (c) => {
 
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
-  const parsed = await readJsonObject(c);
-  if (parsed.response) return parsed.response;
-  const body = parsed.body;
-  const name = textValue(body.name, 160);
-  const phone = textValue(body.phone, 40);
-  const whatsapp = textValue(body.whatsapp, 40);
-  if (!name) return badRequest(c, "Nome Ã© obrigatÃ³rio");
-  if (phone === null || whatsapp === null) return badRequest(c, "Contato invÃ¡lido ou muito longo");
+  const body = await c.req.json();
+  if (!body.name?.trim()) return badRequest(c, "Nome é obrigatório");
   const { data, error } = await svc()
     .from("af_clients")
     .insert({
       workshop_id: user.id,
-      name,
-      phone,
-      whatsapp,
+      name: body.name.trim(),
+      phone: body.phone ?? "",
+      whatsapp: body.whatsapp ?? "",
     })
     .select()
     .single();
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
   return c.json(data, 201);
 });
 
@@ -524,31 +375,28 @@ app.put(`${P}/clients/:id`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "Cliente invÃ¡lido");
-  const parsed = await readJsonObject(c);
-  if (parsed.response) return parsed.response;
-  const body = parsed.body;
-  const name = textValue(body.name, 160);
-  const phone = textValue(body.phone, 40);
-  const whatsapp = textValue(body.whatsapp, 40);
-  if (!name) return badRequest(c, "Nome Ã© obrigatÃ³rio");
-  if (phone === null || whatsapp === null) return badRequest(c, "Contato invÃ¡lido ou muito longo");
+  const body = await c.req.json();
+  if (!body.name?.trim()) return badRequest(c, "Nome é obrigatório");
   const { data, error } = await svc()
     .from("af_clients")
-    .update({ name, phone, whatsapp })
+    .update({
+      name: body.name.trim(),
+      phone: body.phone ?? "",
+      whatsapp: body.whatsapp ?? "",
+    })
     .eq("id", id)
     .eq("workshop_id", user.id)
     .select()
     .single();
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
   if (!data) return c.json({ error: "Not found" }, 404);
   return c.json(data);
 });
 
-// ===== ROTA PÃšBLICA DA OS =====
+// ===== ROTA PÚBLICA DA OS =====
 app.get(`${P}/public/orders/:token`, async (c) => {
   const token = c.req.param("token");
-  if (!isUuid(token)) return badRequest(c, "Token invÃ¡lido");
+  if (!isUuid(token)) return badRequest(c, "Token inválido");
 
   const { data: order, error } = await svc()
     .from("af_service_orders")
@@ -558,8 +406,8 @@ app.get(`${P}/public/orders/:token`, async (c) => {
     .eq("public_token", token)
     .maybeSingle();
 
-  if (error) return serverError(c, error);
-  if (!order) return c.json({ error: "OS nÃ£o encontrada" }, 404);
+  if (error) return serverError(c, error.message);
+  if (!order) return c.json({ error: "OS não encontrada" }, 404);
 
   const [{ data: profile }, { data: client }, { data: vehicle }] =
     await Promise.all([
@@ -601,17 +449,16 @@ app.delete(`${P}/clients/:id`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "Cliente invÃ¡lido");
   const { error } = await svc()
     .from("af_clients")
     .delete()
     .eq("id", id)
     .eq("workshop_id", user.id);
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
   return c.json({ ok: true });
 });
 
-// â”€â”€â”€ Vehicles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Vehicles ─────────────────────────────────────────────────────────────────
 
 app.get(`${P}/vehicles`, async (c) => {
   const user = await getUser(c.req.header("Authorization"));
@@ -624,7 +471,7 @@ app.get(`${P}/vehicles`, async (c) => {
     .select("*")
     .eq("workshop_id", user.id)
     .order("created_at", { ascending: false });
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
   return c.json(data ?? []);
 });
 
@@ -634,16 +481,9 @@ app.post(`${P}/vehicles`, async (c) => {
 
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
-  const parsed = await readJsonObject(c);
-  if (parsed.response) return parsed.response;
-  const body = parsed.body;
-  const plate = textValue(body.plate, 16);
-  const brand = textValue(body.brand, 80);
-  const model = textValue(body.model, 120);
-  const year = textValue(body.year, 8);
-  if (!plate) return badRequest(c, "Placa Ã© obrigatÃ³ria");
-  if (!isUuid(body.client_id)) return badRequest(c, "Cliente invÃ¡lido");
-  if ([brand, model, year].some((v) => v === null)) return badRequest(c, "Dados do veÃ­culo invÃ¡lidos ou muito longos");
+  const body = await c.req.json();
+  if (!body.plate?.trim()) return badRequest(c, "Placa é obrigatória");
+  if (!body.client_id) return badRequest(c, "Cliente é obrigatório");
   // Verify client belongs to this workshop
   const { data: clientCheck } = await svc()
     .from("af_clients")
@@ -651,7 +491,7 @@ app.post(`${P}/vehicles`, async (c) => {
     .eq("id", body.client_id)
     .eq("workshop_id", user.id)
     .maybeSingle();
-  if (!clientCheck) return c.json({ error: "Cliente nÃ£o encontrado" }, 404);
+  if (!clientCheck) return c.json({ error: "Cliente não encontrado" }, 404);
   const { data, error } = await svc()
     .from("af_vehicles")
     .insert({
@@ -664,7 +504,7 @@ app.post(`${P}/vehicles`, async (c) => {
     })
     .select()
     .single();
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
   return c.json(data, 201);
 });
 
@@ -675,18 +515,9 @@ app.put(`${P}/vehicles/:id`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "VeÃ­culo invÃ¡lido");
-  const parsed = await readJsonObject(c);
-  if (parsed.response) return parsed.response;
-  const body = parsed.body;
-  const plate = textValue(body.plate, 16);
-  const brand = textValue(body.brand, 80);
-  const model = textValue(body.model, 120);
-  const year = textValue(body.year, 8);
-  const mileage = textValue(body.mileage, 32);
-  if (!plate) return badRequest(c, "Placa Ã© obrigatÃ³ria");
-  if (!isUuid(body.client_id)) return badRequest(c, "Cliente invÃ¡lido");
-  if ([brand, model, year, mileage].some((v) => v === null)) return badRequest(c, "Dados do veÃ­culo invÃ¡lidos ou muito longos");
+  const body = await c.req.json();
+  if (!body.plate?.trim()) return badRequest(c, "Placa é obrigatória");
+  if (!body.client_id) return badRequest(c, "Cliente é obrigatório");
 
   const { data: clientCheck } = await svc()
     .from("af_clients")
@@ -694,23 +525,23 @@ app.put(`${P}/vehicles/:id`, async (c) => {
     .eq("id", body.client_id)
     .eq("workshop_id", user.id)
     .maybeSingle();
-  if (!clientCheck) return c.json({ error: "Cliente nÃ£o encontrado" }, 404);
+  if (!clientCheck) return c.json({ error: "Cliente não encontrado" }, 404);
 
   const { data, error } = await svc()
     .from("af_vehicles")
     .update({
       client_id: body.client_id,
-      plate: plate.toUpperCase(),
-      brand,
-      model,
-      year,
-      mileage,
+      plate: body.plate.trim().toUpperCase(),
+      brand: body.brand ?? "",
+      model: body.model ?? "",
+      year: body.year ?? "",
+      mileage: body.mileage ?? "",
     })
     .eq("id", id)
     .eq("workshop_id", user.id)
     .select()
     .single();
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
   if (!data) return c.json({ error: "Not found" }, 404);
   return c.json(data);
 });
@@ -722,17 +553,16 @@ app.delete(`${P}/vehicles/:id`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "VeÃ­culo invÃ¡lido");
   const { error } = await svc()
     .from("af_vehicles")
     .delete()
     .eq("id", id)
     .eq("workshop_id", user.id);
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
   return c.json({ ok: true });
 });
 
-// â”€â”€â”€ Financial â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Financial ─────────────────────────────────────────
 
 app.get(`${P}/financial`, async (c) => {
   const user = await getUser(c.req.header("Authorization"));
@@ -747,7 +577,7 @@ app.get(`${P}/financial`, async (c) => {
     .eq("workshop_id", user.id)
     .order("created_at", { ascending: false });
 
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
 
   return c.json(data ?? []);
 });
@@ -759,32 +589,21 @@ app.post(`${P}/financial`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
 
-  const parsed = await readJsonObject(c);
-  if (parsed.response) return parsed.response;
-  const body = parsed.body;
-  const description = textValue(body.description, 240);
-  const category = textValue(body.category, 120);
-  const amount = finiteAmount(body.amount);
-  const type = body.type;
-
-  if (!description) return badRequest(c, "DescriÃ§Ã£o Ã© obrigatÃ³ria");
-  if (category === null) return badRequest(c, "Categoria invÃ¡lida ou muito longa");
-  if (amount === null || amount <= 0) return badRequest(c, "Valor financeiro invÃ¡lido");
-  if (type !== "income" && type !== "expense") return badRequest(c, "Tipo financeiro invÃ¡lido");
+  const body = await c.req.json();
 
   const { data, error } = await svc()
     .from("af_financial_entries")
     .insert({
       workshop_id: user.id,
-      description,
-      amount,
-      type,
-      category,
+      description: body.description,
+      amount: body.amount,
+      type: body.type,
+      category: body.category ?? "",
     })
     .select()
     .single();
 
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
 
   return c.json(data);
 });
@@ -797,7 +616,6 @@ app.delete(`${P}/financial/:id`, async (c) => {
   if (blocked) return blocked;
 
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "LanÃ§amento invÃ¡lido");
 
   const { error } = await svc()
     .from("af_financial_entries")
@@ -805,12 +623,12 @@ app.delete(`${P}/financial/:id`, async (c) => {
     .eq("id", id)
     .eq("workshop_id", user.id);
 
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
 
   return c.json({ ok: true });
 });
 
-// â”€â”€â”€ Service Orders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Service Orders ───────────────────────────────────────────────────────────
 
 app.get(`${P}/orders`, async (c) => {
   const user = await getUser(c.req.header("Authorization"));
@@ -823,7 +641,7 @@ app.get(`${P}/orders`, async (c) => {
     .select("*")
     .eq("workshop_id", user.id)
     .order("updated_at", { ascending: false });
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
   return c.json(data ?? []);
 });
 
@@ -833,25 +651,11 @@ app.post(`${P}/orders`, async (c) => {
 
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
-  const parsed = await readJsonObject(c, 96 * 1024);
-  if (parsed.response) return parsed.response;
-  const body = parsed.body;
-  if (!isUuid(body.client_id)) return badRequest(c, "Cliente invÃ¡lido");
-  if (!isUuid(body.vehicle_id)) return badRequest(c, "VeÃ­culo invÃ¡lido");
-  const reportedIssue = textValue(body.reported_issue, 4000);
-  const employeeName = textValue(body.employee_name, 160);
-  const servicesPerformed = textValue(body.services_performed, 12000, false);
-  const notes = textValue(body.notes, 24000, false);
-  const checklist = textValue(body.checklist, 12000, false);
-  const deliveryDate = safeDateValue(body.delivery_date);
-  const valueAmount = finiteAmount(body.value);
-  const status = body.status ?? "aguardando";
-  if (!reportedIssue) return badRequest(c, "Problema relatado Ã© obrigatÃ³rio");
-  if ([employeeName, servicesPerformed, notes, checklist, deliveryDate].some((v) => v === null)) {
-    return badRequest(c, "Dados da OS invÃ¡lidos ou muito longos");
-  }
-  if (valueAmount === null) return badRequest(c, "Valor da OS invÃ¡lido");
-  if (!["aguardando", "em_manutencao", "finalizado"].includes(status)) return badRequest(c, "Status invÃ¡lido");
+  const body = await c.req.json();
+  if (!body.client_id) return badRequest(c, "Cliente é obrigatório");
+  if (!body.vehicle_id) return badRequest(c, "Veículo é obrigatório");
+  if (!body.reported_issue?.trim())
+    return badRequest(c, "Problema relatado é obrigatório");
   // Verify client + vehicle belong to this workshop
   const { data: clientCheck } = await svc()
     .from("af_clients")
@@ -859,7 +663,7 @@ app.post(`${P}/orders`, async (c) => {
     .eq("id", body.client_id)
     .eq("workshop_id", user.id)
     .maybeSingle();
-  if (!clientCheck) return c.json({ error: "Cliente nÃ£o encontrado" }, 404);
+  if (!clientCheck) return c.json({ error: "Cliente não encontrado" }, 404);
 
   const { data: vCheck } = await svc()
     .from("af_vehicles")
@@ -869,7 +673,7 @@ app.post(`${P}/orders`, async (c) => {
     .eq("workshop_id", user.id)
     .maybeSingle();
   if (!vCheck)
-    return c.json({ error: "VeÃ­culo nÃ£o encontrado para este cliente" }, 404);
+    return c.json({ error: "Veículo não encontrado para este cliente" }, 404);
   const now = new Date().toISOString();
 
   const orderInsert: Record<string, any> = {
@@ -877,25 +681,25 @@ app.post(`${P}/orders`, async (c) => {
     workshop_id: user.id,
     client_id: body.client_id,
     vehicle_id: body.vehicle_id,
-    reported_issue: reportedIssue,
-    employee_name: employeeName,
-    services_performed: servicesPerformed,
-    value: String(valueAmount),
-    status,
-    notes,
+    reported_issue: body.reported_issue.trim(),
+    employee_name: body.employee_name?.trim() ?? "",
+    services_performed: body.services_performed ?? "",
+    value: body.value ?? "0",
+    status: body.status ?? "aguardando",
+    notes: body.notes ?? "",
     created_at: now,
     updated_at: now,
   };
 
-  if (deliveryDate) orderInsert.delivery_date = deliveryDate;
-  if (checklist) orderInsert.checklist = checklist;
+  if (body.delivery_date) orderInsert.delivery_date = body.delivery_date;
+  if (body.checklist) orderInsert.checklist = body.checklist;
 
   const { data, error } = await svc()
     .from("af_service_orders")
     .insert(orderInsert)
     .select()
     .single();
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
   return c.json(data, 201);
 });
 
@@ -906,50 +710,27 @@ app.put(`${P}/orders/:id`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "OS invÃ¡lida");
-  const parsed = await readJsonObject(c, 96 * 1024);
-  if (parsed.response) return parsed.response;
-  const body = parsed.body;
+  const body = await c.req.json();
+  const allowed = [
+    "reported_issue",
+    "employee_name",
+    "services_performed",
+    "value",
+    "status",
+    "notes",
+    "delivery_date",
+    "checklist",
+  ];
   const patch: Record<string, any> = { updated_at: new Date().toISOString() };
+  for (const key of allowed) {
+    if (body[key] !== undefined) patch[key] = body[key];
+  }
 
-  if (body.reported_issue !== undefined) {
-    const value = textValue(body.reported_issue, 4000);
-    if (!value) return badRequest(c, "Problema relatado invÃ¡lido");
-    patch.reported_issue = value;
-  }
-  if (body.employee_name !== undefined) {
-    const value = textValue(body.employee_name, 160);
-    if (value === null) return badRequest(c, "FuncionÃ¡rio invÃ¡lido");
-    patch.employee_name = value;
-  }
-  if (body.services_performed !== undefined) {
-    const value = textValue(body.services_performed, 12000, false);
-    if (value === null) return badRequest(c, "ServiÃ§os executados invÃ¡lidos");
-    patch.services_performed = value;
-  }
-  if (body.value !== undefined) {
-    const amount = finiteAmount(body.value);
-    if (amount === null) return badRequest(c, "Valor da OS invÃ¡lido");
-    patch.value = String(amount);
-  }
-  if (body.status !== undefined) {
-    if (!["aguardando", "em_manutencao", "finalizado"].includes(body.status)) return badRequest(c, "Status invÃ¡lido");
-    patch.status = body.status;
-  }
-  if (body.notes !== undefined) {
-    const value = textValue(body.notes, 24000, false);
-    if (value === null) return badRequest(c, "ObservaÃ§Ãµes invÃ¡lidas");
-    patch.notes = value;
-  }
-  if (body.delivery_date !== undefined) {
-    const value = safeDateValue(body.delivery_date);
-    if (value === null) return badRequest(c, "Data de entrega invÃ¡lida");
-    patch.delivery_date = value || null;
-  }
-  if (body.checklist !== undefined) {
-    const value = textValue(body.checklist, 12000, false);
-    if (value === null) return badRequest(c, "Checklist invÃ¡lido");
-    patch.checklist = value;
+  if (
+    patch.status &&
+    !["aguardando", "em_manutencao", "finalizado"].includes(patch.status)
+  ) {
+    return badRequest(c, "Status inválido");
   }
 
   const { data, error } = await svc()
@@ -959,7 +740,7 @@ app.put(`${P}/orders/:id`, async (c) => {
     .eq("workshop_id", user.id)
     .select()
     .single();
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
   if (!data) return c.json({ error: "Not found" }, 404);
   return c.json(data);
 });
@@ -971,13 +752,12 @@ app.delete(`${P}/orders/:id`, async (c) => {
   const blocked = await requireActiveSubscription(c, user);
   if (blocked) return blocked;
   const id = c.req.param("id");
-  if (!isUuid(id)) return badRequest(c, "OS invÃ¡lida");
   const { error } = await svc()
     .from("af_service_orders")
     .delete()
     .eq("id", id)
     .eq("workshop_id", user.id);
-  if (error) return serverError(c, error);
+  if (error) return serverError(c, error.message);
 
   return c.json({ ok: true });
 });
@@ -1025,7 +805,6 @@ async function syncAccessState(params: {
   status: AccessStatus;
   expiresAt: Date;
   email?: string | null;
-  paymentId?: string | null;
   subscriptionPatch?: Record<string, unknown>;
 }) {
   const subscriptionPayload: Record<string, unknown> = {
@@ -1053,9 +832,6 @@ async function syncAccessState(params: {
     subscription_ends_at: params.expiresAt.toISOString(),
   };
 
-  if (params.paymentId !== undefined) {
-    profilePayload.mercadopago_payment_id = params.paymentId;
-  }
   if (params.email !== undefined) profilePayload.email = params.email;
 
   const { data: profile, error: profileError } = await svc()
@@ -1066,7 +842,7 @@ async function syncAccessState(params: {
     .maybeSingle();
 
   if (profileError) throw profileError;
-  if (!profile) throw new Error("Perfil da oficina nÃ£o encontrado");
+  if (!profile) throw new Error("Perfil da oficina não encontrado");
 }
 
 async function activateTrialAccess(params: {
@@ -1104,92 +880,350 @@ async function activateTrialAccess(params: {
   });
 }
 
-function getMercadoPagoToken() {
-  const accessToken = Deno.env.get("MERCADOPAGO_ACCESS_TOKEN");
-  if (!accessToken) throw new Error("Mercado Pago token nÃ£o configurado");
-  return accessToken;
+function getAsaasApiKey() {
+  const apiKey = Deno.env.get("ASAAS_API_KEY");
+  if (!apiKey) throw new Error("ASAAS_API_KEY não configurada");
+  return apiKey;
 }
 
-async function mercadoPagoGet(path: string) {
-  const response = await fetch(`https://api.mercadopago.com${path}`, {
-    headers: { Authorization: `Bearer ${getMercadoPagoToken()}` },
+function getAsaasApiUrl() {
+  return (Deno.env.get("ASAAS_API_URL") ?? "https://api.asaas.com/v3").replace(/\/$/, "");
+}
+
+function getAppBaseUrl() {
+  return (Deno.env.get("APP_BASE_URL") ?? "https://www.vortanoficina.com.br").replace(/\/$/, "");
+}
+
+function getMonthlyPrice() {
+  const value = Number(Deno.env.get("VORTAN_MONTHLY_PRICE") ?? "29.90");
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("VORTAN_MONTHLY_PRICE inválido");
+  }
+  return value;
+}
+
+async function asaasRequest(path: string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers ?? {});
+  headers.set("accept", "application/json");
+  headers.set("access_token", getAsaasApiKey());
+  headers.set("User-Agent", "VortanOficina/1.0");
+  if (init.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const response = await fetch(`${getAsaasApiUrl()}${path}`, {
+    ...init,
+    headers,
   });
-  const data = await response.json().catch(() => null);
+  const raw = await response.text();
+  let data: any = null;
+  try {
+    data = raw ? JSON.parse(raw) : null;
+  } catch {
+    data = { raw };
+  }
   return { response, data };
 }
 
-function hexToBytes(value: string) {
-  if (!/^[0-9a-f]+$/i.test(value) || value.length % 2 !== 0) return null;
-  const bytes = new Uint8Array(value.length / 2);
-  for (let index = 0; index < bytes.length; index += 1) {
-    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+function asaasCheckoutUrl(checkoutId: string, returnedUrl?: unknown) {
+  const apiUrl = String(returnedUrl ?? "").trim();
+  if (/^https:\/\//i.test(apiUrl)) return apiUrl;
+
+  // O POST /checkouts retorna apenas o ID. No Sandbox, o link público real
+  // usa o host/path abaixo (confirmado pelo evento CHECKOUT_CREATED).
+  // Em produção, mantemos o formato oficial documentado pelo Asaas.
+  if (getAsaasApiUrl().includes("api-sandbox.asaas.com")) {
+    return `https://sandbox.asaas.com/000/checkoutSession/show/${encodeURIComponent(checkoutId)}`;
   }
-  return bytes;
+
+  return `https://asaas.com/checkoutSession/show?id=${encodeURIComponent(checkoutId)}`;
 }
 
-function timingSafeEqualHex(left: string, right: string) {
-  const leftBytes = hexToBytes(left);
-  const rightBytes = hexToBytes(right);
-  if (!leftBytes || !rightBytes || leftBytes.length !== rightBytes.length)
-    return false;
-
-  let difference = 0;
-  for (let index = 0; index < leftBytes.length; index += 1) {
-    difference |= leftBytes[index] ^ rightBytes[index];
-  }
-  return difference === 0;
+function extractUuid(value: unknown) {
+  const text = String(value ?? "");
+  const match = text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i);
+  return match?.[0] && isUuid(match[0]) ? match[0] : null;
 }
 
-async function validateMercadoPagoWebhookSignature(c: any, dataId: string) {
-  const secret = Deno.env.get("MERCADOPAGO_WEBHOOK_SECRET");
-  if (!secret) {
-    throw new Error("MERCADOPAGO_WEBHOOK_SECRET nÃ£o configurado");
+
+function formatAsaasDateTime(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
+}
+
+async function getAsaasCustomer(customerId: string) {
+  const { response, data } = await asaasRequest(`/customers/${encodeURIComponent(customerId)}`);
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(
+      data?.errors?.[0]?.description ?? data?.message ?? "Erro ao consultar cliente no Asaas",
+    );
+  }
+  return data;
+}
+
+function asaasResourceId(value: any) {
+  if (typeof value === "string") return value.trim();
+  if (value && typeof value === "object" && typeof value.id === "string") {
+    return value.id.trim();
+  }
+  return "";
+}
+
+async function getAsaasCheckoutSession(checkoutId: string) {
+  if (!checkoutId) return null;
+  const { data, error } = await svc()
+    .from("billing_checkout_sessions")
+    .select("*")
+    .eq("provider", "asaas")
+    .eq("checkout_id", checkoutId)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function getLatestAsaasCheckoutSession(
+  userId: string,
+  mode?: "single" | "subscription",
+) {
+  let query = svc()
+    .from("billing_checkout_sessions")
+    .select("*")
+    .eq("provider", "asaas")
+    .eq("user_id", userId);
+
+  if (mode) query = query.eq("mode", mode);
+
+  const { data, error } = await query
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function upsertAsaasCheckoutSession(params: {
+  checkoutId: string;
+  userId: string;
+  mode: "single" | "subscription";
+  status: string;
+  externalReference?: string | null;
+  customerId?: string | null;
+  subscriptionId?: string | null;
+}) {
+  const current = await getAsaasCheckoutSession(params.checkoutId);
+  const { error } = await svc()
+    .from("billing_checkout_sessions")
+    .upsert(
+      {
+        provider: "asaas",
+        checkout_id: params.checkoutId,
+        user_id: params.userId,
+        mode: current?.mode ?? params.mode,
+        status: params.status,
+        external_reference:
+          params.externalReference ?? current?.external_reference ?? null,
+        customer_id: params.customerId ?? current?.customer_id ?? null,
+        subscription_id:
+          params.subscriptionId ?? current?.subscription_id ?? null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "provider,checkout_id" },
+    );
+  if (error) throw error;
+}
+
+async function findUserBySubscriptionProviderField(
+  field: "provider_customer_id" | "provider_subscription_id" | "provider_checkout_id",
+  value: string,
+) {
+  if (!value) return null;
+  const { data, error } = await svc()
+    .from("subscriptions")
+    .select("user_id")
+    .eq(field, value)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.user_id ? String(data.user_id) : null;
+}
+
+async function findUserByCheckoutSessionField(
+  field: "customer_id" | "subscription_id",
+  value: string,
+) {
+  if (!value) return null;
+  const { data, error } = await svc()
+    .from("billing_checkout_sessions")
+    .select("user_id")
+    .eq("provider", "asaas")
+    .eq(field, value)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.user_id ? String(data.user_id) : null;
+}
+
+async function resolveAsaasUserId(params: {
+  externalReference?: unknown;
+  checkoutId?: unknown;
+  subscriptionId?: unknown;
+  customerId?: unknown;
+}) {
+  const fromReference = extractUuid(params.externalReference);
+  if (fromReference) return fromReference;
+
+  const checkoutId = asaasResourceId(params.checkoutId);
+  if (checkoutId) {
+    const checkout = await getAsaasCheckoutSession(checkoutId);
+    if (checkout?.user_id) return String(checkout.user_id);
+    const fromSubscriptionRow = await findUserBySubscriptionProviderField(
+      "provider_checkout_id",
+      checkoutId,
+    );
+    if (fromSubscriptionRow) return fromSubscriptionRow;
   }
 
-  const signatureHeader = c.req.header("x-signature") ?? "";
-  const requestId = c.req.header("x-request-id") ?? "";
-  let timestamp = "";
-  let receivedHash = "";
-
-  for (const part of signatureHeader.split(",")) {
-    const [rawKey, ...rawValue] = part.split("=");
-    const key = rawKey?.trim();
-    const value = rawValue.join("=").trim();
-    if (key === "ts") timestamp = value;
-    if (key === "v1") receivedHash = value;
+  const subscriptionId = asaasResourceId(params.subscriptionId);
+  if (subscriptionId) {
+    const fromSubscriptionRow = await findUserBySubscriptionProviderField(
+      "provider_subscription_id",
+      subscriptionId,
+    );
+    if (fromSubscriptionRow) return fromSubscriptionRow;
+    const fromCheckoutRow = await findUserByCheckoutSessionField(
+      "subscription_id",
+      subscriptionId,
+    );
+    if (fromCheckoutRow) return fromCheckoutRow;
   }
 
-  if (!timestamp || !receivedHash) return false;
+  const customerId = asaasResourceId(params.customerId);
+  if (customerId) {
+    const fromSubscriptionRow = await findUserBySubscriptionProviderField(
+      "provider_customer_id",
+      customerId,
+    );
+    if (fromSubscriptionRow) return fromSubscriptionRow;
+    const fromCheckoutRow = await findUserByCheckoutSessionField(
+      "customer_id",
+      customerId,
+    );
+    if (fromCheckoutRow) return fromCheckoutRow;
 
-  const timestampNumber = Number(timestamp);
-  if (!Number.isFinite(timestampNumber)) return false;
-  const timestampMs = timestampNumber > 10_000_000_000 ? timestampNumber : timestampNumber * 1000;
-  if (Math.abs(Date.now() - timestampMs) > 15 * 60 * 1000) return false;
+    // Fallback para clientes Asaas já existentes/migrados com externalReference.
+    const customer = await getAsaasCustomer(customerId);
+    const fromCustomer = extractUuid(customer?.externalReference);
+    if (fromCustomer) return fromCustomer;
+  }
 
-  const manifestParts: string[] = [];
-  const normalizedDataId = dataId.trim().toLowerCase();
-  if (normalizedDataId) manifestParts.push(`id:${normalizedDataId}`);
-  if (requestId) manifestParts.push(`request-id:${requestId}`);
-  manifestParts.push(`ts:${timestamp}`);
-  const manifest = `${manifestParts.join(";")};`;
+  throw new Error("Evento Asaas sem vínculo com usuário Vortan");
+}
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
+async function listAsaasPaymentsForCheckout(checkoutId: string) {
+  const query = new URLSearchParams({ checkoutSession: checkoutId, limit: "100" });
+  const result = await asaasRequest(`/payments?${query.toString()}`);
+  if (!result.response.ok) {
+    throw new Error(
+      result.data?.errors?.[0]?.description ??
+        result.data?.message ??
+        "Erro ao conciliar cobranças do Checkout Asaas",
+    );
+  }
+  return Array.isArray(result.data?.data) ? result.data.data : [];
+}
+
+function chooseAsaasCheckoutPayment(payments: any[]) {
+  const expected = getMonthlyPrice();
+  const matching = payments.filter(
+    (payment: any) => Math.abs(Number(payment?.value) - expected) < 0.009,
   );
-  const signed = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(manifest),
+  return (
+    matching.find((payment: any) =>
+      ["CONFIRMED", "RECEIVED"].includes(String(payment?.status ?? "").toUpperCase()),
+    ) ?? matching[0] ?? null
   );
-  const calculatedHash = Array.from(new Uint8Array(signed))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+}
 
-  return timingSafeEqualHex(calculatedHash, receivedHash.toLowerCase());
+async function reconcileAsaasCheckout(checkout: any, event: string) {
+  const checkoutId = asaasResourceId(checkout?.id);
+  if (!checkoutId) throw new Error("Webhook Asaas sem ID do Checkout");
+
+  const stored = await getAsaasCheckoutSession(checkoutId);
+  const userId =
+    (stored?.user_id ? String(stored.user_id) : null) ??
+    extractUuid(checkout?.externalReference);
+  if (!userId) throw new Error("Checkout Asaas sem vínculo com usuário Vortan");
+
+  const mode: "single" | "subscription" =
+    stored?.mode === "subscription" ||
+      (Array.isArray(checkout?.chargeTypes) && checkout.chargeTypes.includes("RECURRENT"))
+      ? "subscription"
+      : "single";
+
+  let customerId = asaasResourceId(checkout?.customer) || String(stored?.customer_id ?? "");
+  let subscriptionId = String(stored?.subscription_id ?? "");
+  let payment: any = null;
+
+  if (event === "CHECKOUT_PAID" || !customerId || (mode === "subscription" && !subscriptionId)) {
+    const payments = await listAsaasPaymentsForCheckout(checkoutId);
+    payment = chooseAsaasCheckoutPayment(payments);
+    customerId = asaasResourceId(payment?.customer) || customerId;
+    subscriptionId = asaasResourceId(payment?.subscription) || subscriptionId;
+  }
+
+  await upsertAsaasCheckoutSession({
+    checkoutId,
+    userId,
+    mode,
+    status: event,
+    externalReference: checkout?.externalReference
+      ? String(checkout.externalReference)
+      : stored?.external_reference ?? null,
+    customerId: customerId || null,
+    subscriptionId: subscriptionId || null,
+  });
+
+  const patch: Record<string, unknown> = {
+    billing_provider: "asaas",
+    provider_checkout_id: checkoutId,
+    provider_status: event,
+  };
+  if (customerId) patch.provider_customer_id = customerId;
+  if (subscriptionId) patch.provider_subscription_id = subscriptionId;
+
+  const { error } = await svc()
+    .from("subscriptions")
+    .update(patch)
+    .eq("user_id", userId);
+  if (error) throw error;
+
+  return { userId, mode, customerId, subscriptionId, payment };
+}
+
+async function wasAsaasPaymentProcessed(paymentId: string) {
+  const { data, error } = await svc()
+    .from("billing_webhook_events")
+    .select("id")
+    .eq("provider", "asaas")
+    .eq("resource_id", paymentId)
+    .in("topic", ["PAYMENT_CONFIRMED", "PAYMENT_RECEIVED"])
+    .eq("status", "processed")
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return Boolean(data);
 }
 
 function webhookEventKey(params: {
@@ -1212,6 +1246,7 @@ function webhookEventKey(params: {
 }
 
 async function claimWebhookEvent(params: {
+  provider: string;
   topic: string;
   resourceId: string;
   notificationId: string;
@@ -1226,7 +1261,7 @@ async function claimWebhookEvent(params: {
   const { data, error } = await database
     .from("billing_webhook_events")
     .insert({
-      provider: "mercadopago",
+      provider: params.provider,
       event_key: eventKey,
       topic: params.topic,
       resource_id: params.resourceId,
@@ -1248,7 +1283,7 @@ async function claimWebhookEvent(params: {
   const { data: existing, error: existingError } = await database
     .from("billing_webhook_events")
     .select("id, status, attempts, updated_at")
-    .eq("provider", "mercadopago")
+    .eq("provider", params.provider)
     .eq("event_key", eventKey)
     .single();
 
@@ -1308,184 +1343,118 @@ async function failWebhookEvent(eventId: string, errorMessage: string) {
   if (error) console.error("Erro ao registrar falha do webhook:", error);
 }
 
-async function processApprovedPayment(paymentId: string) {
-  const { response, data: payment } = await mercadoPagoGet(
-    `/v1/payments/${encodeURIComponent(paymentId)}`,
-  );
+async function processAsaasPayment(payment: any, event: string) {
+  const paymentId = String(payment?.id ?? "").trim();
+  if (!paymentId) throw new Error("Webhook Asaas sem ID da cobrança");
 
-  if (!response.ok) {
-    throw new Error(
-      payment?.message ?? "Pagamento nÃ£o encontrado no Mercado Pago",
-    );
-  }
-
-  if (payment?.status !== "approved") {
-    return { ok: true, ignored: true, status: payment?.status ?? "unknown" };
-  }
-
-  const userId = String(payment?.external_reference ?? "");
-  if (!isUuid(userId))
-    throw new Error("Pagamento sem referÃªncia de usuÃ¡rio vÃ¡lida");
-
-  const expectedCurrency = Deno.env.get("MERCADOPAGO_CURRENCY") ?? "BRL";
-  const expectedAmount = Number(
-    Deno.env.get("VORTAN_MONTHLY_PRICE") ?? "29.90",
-  );
-  const receivedAmount = Number(payment?.transaction_amount);
-
-  if (payment?.currency_id !== expectedCurrency) {
-    throw new Error("Moeda do pagamento invÃ¡lida");
-  }
-  if (
-    !Number.isFinite(receivedAmount) ||
-    Math.abs(receivedAmount - expectedAmount) > 0.009
-  ) {
-    throw new Error("Valor do pagamento invÃ¡lido");
-  }
-
-  const expectedCollector = Deno.env.get("MERCADOPAGO_COLLECTOR_ID");
-  if (
-    expectedCollector &&
-    String(payment?.collector_id ?? "") !== expectedCollector
-  ) {
-    throw new Error("Recebedor do pagamento invÃ¡lido");
-  }
-
-  const { data: profile, error: profileError } = await svc()
-    .from("af_profiles")
-    .select("id, subscription_ends_at, mercadopago_payment_id")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (profileError) throw profileError;
-  if (!profile) throw new Error("UsuÃ¡rio do pagamento nÃ£o encontrado");
-
-  const { data: subscription, error: subscriptionError } = await svc()
-    .from("subscriptions")
-    .select("status, expires_at")
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  if (subscriptionError) throw subscriptionError;
-
-  const normalizedPaymentId = String(payment.id);
-  const duplicate = profile.mercadopago_payment_id === normalizedPaymentId;
-
-  if (duplicate) {
-    const knownExpiration =
-      profile.subscription_ends_at ?? subscription?.expires_at;
-    const expiresAt = knownExpiration ? new Date(knownExpiration) : new Date();
-    await syncAccessState({
-      userId,
-      email: payment?.payer?.email ?? undefined,
-      paymentId: normalizedPaymentId,
-      status: "active",
-      expiresAt: Number.isNaN(expiresAt.getTime()) ? new Date() : expiresAt,
-      subscriptionPatch: {
-        provider_status: "approved",
-        cancel_at_period_end: false,
-        canceled_at: null,
-      },
-    });
+  if (await wasAsaasPaymentProcessed(paymentId)) {
     return { ok: true, duplicate: true };
   }
 
-  const approvedAt = payment?.date_approved
-    ? new Date(payment.date_approved)
-    : new Date();
-  const safeApprovedAt = Number.isNaN(approvedAt.getTime())
-    ? new Date()
-    : approvedAt;
-  const existingExpiration = subscription?.expires_at
-    ? new Date(subscription.expires_at)
-    : null;
+  const expectedAmount = getMonthlyPrice();
+  const receivedAmount = Number(payment?.value);
+  if (!Number.isFinite(receivedAmount) || Math.abs(receivedAmount - expectedAmount) > 0.009) {
+    throw new Error("Valor do pagamento Asaas inválido");
+  }
+
+  const checkoutId = asaasResourceId(payment?.checkoutSession);
+  const subscriptionId = asaasResourceId(payment?.subscription);
+  const customerId = asaasResourceId(payment?.customer);
+  const userId = await resolveAsaasUserId({
+    externalReference: payment?.externalReference,
+    checkoutId,
+    subscriptionId,
+    customerId,
+  });
+
+  const existing = await getSubscription(userId);
+  if (String(existing?.last_payment_id ?? "") === paymentId) {
+    return { ok: true, duplicate: true };
+  }
+
+  const paidAtRaw =
+    payment?.confirmedDate ?? payment?.paymentDate ?? payment?.clientPaymentDate ?? payment?.dueDate;
+  const paidAt = paidAtRaw ? new Date(paidAtRaw) : new Date();
+  const safePaidAt = Number.isNaN(paidAt.getTime()) ? new Date() : paidAt;
+  const existingExpiration = existing?.expires_at ? new Date(existing.expires_at) : null;
   const baseDate =
     existingExpiration &&
-    !Number.isNaN(existingExpiration.getTime()) &&
-    existingExpiration.getTime() > safeApprovedAt.getTime()
+      !Number.isNaN(existingExpiration.getTime()) &&
+      existingExpiration.getTime() > safePaidAt.getTime()
       ? existingExpiration
-      : safeApprovedAt;
+      : safePaidAt;
   const expiresAt = addMonths(baseDate, 1);
+
+  const subscriptionPatch: Record<string, unknown> = {
+    billing_provider: "asaas",
+    provider_customer_id: customerId || existing?.provider_customer_id || null,
+    provider_status: String(payment?.status ?? event),
+    last_payment_id: paymentId,
+    last_payment_at: safePaidAt.toISOString(),
+    cancel_at_period_end: false,
+    canceled_at: null,
+  };
+  if (subscriptionId) subscriptionPatch.provider_subscription_id = subscriptionId;
+  if (checkoutId) subscriptionPatch.provider_checkout_id = checkoutId;
 
   await syncAccessState({
     userId,
-    email: payment?.payer?.email ?? undefined,
-    paymentId: normalizedPaymentId,
     status: "active",
     expiresAt,
-    subscriptionPatch: {
-      provider_status: "approved",
-      cancel_at_period_end: false,
-      canceled_at: null,
-    },
+    subscriptionPatch,
   });
+
+  if (checkoutId) {
+    const storedCheckout = await getAsaasCheckoutSession(checkoutId);
+    await upsertAsaasCheckoutSession({
+      checkoutId,
+      userId,
+      mode:
+        storedCheckout?.mode === "subscription" || subscriptionId
+          ? "subscription"
+          : "single",
+      status: event,
+      externalReference: storedCheckout?.external_reference ?? null,
+      customerId: customerId || null,
+      subscriptionId: subscriptionId || null,
+    });
+  }
 
   return { ok: true, expires_at: expiresAt.toISOString() };
 }
 
-async function processPreapproval(preapprovalId: string) {
-  const { response, data: preapproval } = await mercadoPagoGet(
-    `/preapproval/${encodeURIComponent(preapprovalId)}`,
-  );
+async function processAsaasSubscription(subscription: any, event: string) {
+  const subscriptionId = String(subscription?.id ?? "").trim();
+  if (!subscriptionId) throw new Error("Webhook Asaas sem ID da assinatura");
 
-  if (!response.ok) {
-    throw new Error(
-      preapproval?.message ?? "Assinatura nÃ£o encontrada no Mercado Pago",
-    );
-  }
-
-  const userId = String(preapproval?.external_reference ?? "");
-  if (!isUuid(userId))
-    throw new Error("Assinatura sem referÃªncia de usuÃ¡rio vÃ¡lida");
-
-  const expectedPlanId = Deno.env.get("MERCADOPAGO_PREAPPROVAL_PLAN_ID");
-  if (expectedPlanId && preapproval?.preapproval_plan_id !== expectedPlanId) {
-    throw new Error("Plano da assinatura invÃ¡lido");
-  }
-
+  const customerId = asaasResourceId(subscription?.customer);
+  const userId = await resolveAsaasUserId({
+    externalReference: subscription?.externalReference,
+    subscriptionId,
+    customerId,
+  });
   const current = await getSubscription(userId);
-  const providerStatus = String(preapproval?.status ?? "unknown");
-  const currentExpiration = current?.expires_at
-    ? new Date(current.expires_at)
-    : new Date();
-  const safeExpiration = Number.isNaN(currentExpiration.getTime())
-    ? new Date()
-    : currentExpiration;
+  const currentExpiration = current?.expires_at ? new Date(current.expires_at) : new Date();
+  const safeExpiration = Number.isNaN(currentExpiration.getTime()) ? new Date() : currentExpiration;
   const stillHasAccess = isSubscriptionActive(current);
+  const isEnding = ["SUBSCRIPTION_INACTIVATED", "SUBSCRIPTION_DELETED"].includes(event);
 
-  if (["cancelled", "canceled", "paused"].includes(providerStatus)) {
-    if (stillHasAccess) {
-      const { error } = await svc()
-        .from("subscriptions")
-        .upsert(
-          {
-            user_id: userId,
-            plan_name: "mensal",
-            status: current.status,
-            expires_at: safeExpiration.toISOString(),
-            preapproval_id: String(preapproval.id),
-            mercadopago_subscription_id: String(preapproval.id),
-            provider_status: providerStatus,
-            cancel_at_period_end: true,
-            canceled_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id" },
-        );
-      if (error) throw error;
-    } else {
-      await syncAccessState({
-        userId,
-        status: "canceled",
-        expiresAt: new Date(),
-        subscriptionPatch: {
-          preapproval_id: String(preapproval.id),
-          mercadopago_subscription_id: String(preapproval.id),
-          provider_status: providerStatus,
-          cancel_at_period_end: true,
-          canceled_at: new Date().toISOString(),
-        },
-      });
-    }
+  const patch: Record<string, unknown> = {
+    billing_provider: "asaas",
+    provider_customer_id: customerId || current?.provider_customer_id || null,
+    provider_subscription_id: subscriptionId,
+    provider_status: String(subscription?.status ?? event),
+    cancel_at_period_end: isEnding,
+    canceled_at: isEnding ? new Date().toISOString() : null,
+  };
+
+  if (isEnding && !stillHasAccess) {
+    await syncAccessState({
+      userId,
+      status: "canceled",
+      expiresAt: safeExpiration,
+      subscriptionPatch: patch,
+    });
   } else {
     const status: AccessStatus = stillHasAccess ? current.status : "pending";
     const { error } = await svc()
@@ -1496,81 +1465,213 @@ async function processPreapproval(preapprovalId: string) {
           plan_name: "mensal",
           status,
           expires_at: safeExpiration.toISOString(),
-          preapproval_id: String(preapproval.id),
-          mercadopago_subscription_id: String(preapproval.id),
-          provider_status: providerStatus,
-          cancel_at_period_end: false,
-          canceled_at: null,
+          ...patch,
         },
         { onConflict: "user_id" },
       );
     if (error) throw error;
   }
 
-  return { ok: true, provider_status: providerStatus };
+  return { ok: true, provider_status: patch.provider_status };
 }
 
-// â”€â”€â”€ Billing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function processAsaasPaymentIssue(payment: any, event: string) {
+  const userId = await resolveAsaasUserId({
+    externalReference: payment?.externalReference,
+    checkoutId: payment?.checkoutSession,
+    subscriptionId: payment?.subscription,
+    customerId: payment?.customer,
+  });
+  const current = await getSubscription(userId);
+  if (!current) return { ok: true, ignored: true };
+
+  const patch: Record<string, unknown> = {
+    billing_provider: "asaas",
+    provider_status: event,
+  };
+  const customerId = asaasResourceId(payment?.customer);
+  const subscriptionId = asaasResourceId(payment?.subscription);
+  const checkoutId = asaasResourceId(payment?.checkoutSession);
+  if (customerId) patch.provider_customer_id = customerId;
+  if (subscriptionId) patch.provider_subscription_id = subscriptionId;
+  if (checkoutId) patch.provider_checkout_id = checkoutId;
+
+  const isLatestPayment = String(current?.last_payment_id ?? "") === String(payment?.id ?? "");
+  if (event === "PAYMENT_REFUNDED" && isLatestPayment) {
+    await syncAccessState({
+      userId,
+      status: "expired",
+      expiresAt: new Date(),
+      subscriptionPatch: patch,
+    });
+    return { ok: true, access_revoked: true };
+  }
+
+  const expiration = current.expires_at ? new Date(current.expires_at) : new Date(0);
+  if (
+    ["PAYMENT_OVERDUE", "PAYMENT_CREDIT_CARD_CAPTURE_REFUSED"].includes(event) &&
+    !Number.isNaN(expiration.getTime()) &&
+    expiration.getTime() <= Date.now()
+  ) {
+    await syncAccessState({
+      userId,
+      status: "expired",
+      expiresAt: expiration,
+      subscriptionPatch: patch,
+    });
+    return { ok: true, expired: true };
+  }
+
+  const { error } = await svc()
+    .from("subscriptions")
+    .update(patch)
+    .eq("user_id", userId);
+  if (error) throw error;
+  return { ok: true, updated: true };
+}
+
+async function processAsaasCheckout(checkout: any, event: string) {
+  const reconciled = await reconcileAsaasCheckout(checkout, event);
+
+  if (event === "CHECKOUT_PAID" && reconciled.payment) {
+    const status = String(reconciled.payment?.status ?? "").toUpperCase();
+    if (["CONFIRMED", "RECEIVED"].includes(status)) {
+      return await processAsaasPayment(reconciled.payment, event);
+    }
+  }
+
+  return {
+    ok: true,
+    checkout_id: asaasResourceId(checkout?.id),
+    status: event,
+    reconciled: true,
+  };
+}
+
+
+// ─── Billing (Asaas) ────────────────────────────────────────────────────────
+
+async function createAsaasCheckout(user: any, mode: "single" | "subscription") {
+  if (!user.email) throw new Error("Usuário sem e-mail válido");
+
+  const price = getMonthlyPrice();
+  const appUrl = getAppBaseUrl();
+  const recurring = mode === "subscription";
+  const externalReference = `vortan:${recurring ? "recurring" : "single"}:${user.id}`;
+  const existing = await getSubscription(user.id);
+  const latestCheckout = await getLatestAsaasCheckoutSession(user.id);
+
+  // No primeiro Checkout a Vortan não envia customer/customerData porque não
+  // armazena CPF/CNPJ. Depois que o Asaas cria/associa o cliente, reutilizamos
+  // o ID nas próximas compras para evitar cadastro duplicado. O GET também
+  // impede reutilizar por engano um ID do Sandbox depois da troca para Produção.
+  const candidateCustomerId =
+    (String(existing?.billing_provider ?? "") === "asaas"
+      ? String(existing?.provider_customer_id ?? "").trim()
+      : "") || String(latestCheckout?.customer_id ?? "").trim();
+  let knownCustomerId = "";
+  if (candidateCustomerId) {
+    const customer = await getAsaasCustomer(candidateCustomerId);
+    if (customer?.id) knownCustomerId = candidateCustomerId;
+  }
+
+  const payload: Record<string, unknown> = {
+    billingTypes: recurring ? ["CREDIT_CARD"] : ["PIX", "CREDIT_CARD"],
+    chargeTypes: recurring ? ["RECURRENT"] : ["DETACHED"],
+    minutesToExpire: 60,
+    externalReference,
+    callback: {
+      successUrl: `${appUrl}?billing=success`,
+      cancelUrl: `${appUrl}?billing=canceled`,
+      expiredUrl: `${appUrl}?billing=expired`,
+    },
+    items: [
+      {
+        name: recurring ? "Plano Fundadores" : "Vortan Oficina - 1 mês",
+        description: recurring
+          ? "Assinatura mensal Vortan Oficina"
+          : "Acesso Vortan Oficina por 1 mês",
+        quantity: 1,
+        value: price,
+      },
+    ],
+  };
+
+  if (knownCustomerId) payload.customer = knownCustomerId;
+
+  if (recurring) {
+    payload.subscription = {
+      cycle: "MONTHLY",
+      nextDueDate: formatAsaasDateTime(new Date()),
+    };
+  }
+
+  const created = await asaasRequest("/checkouts", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  if (!created.response.ok || !created.data?.id) {
+    const description =
+      created.data?.errors?.[0]?.description ??
+      created.data?.message ??
+      "Erro ao criar checkout no Asaas";
+    throw new Error(description);
+  }
+
+  const checkoutId = String(created.data.id);
+  await upsertAsaasCheckoutSession({
+    checkoutId,
+    userId: user.id,
+    mode,
+    status: "created",
+    externalReference,
+    customerId: knownCustomerId || null,
+  });
+
+  const keepCurrentAccess = isSubscriptionActive(existing);
+  const expiresAt = existing?.expires_at ?? new Date().toISOString();
+  const { error } = await svc()
+    .from("subscriptions")
+    .upsert(
+      {
+        user_id: user.id,
+        plan_name: "mensal",
+        status: keepCurrentAccess ? existing.status : "pending",
+        expires_at: expiresAt,
+        billing_provider: "asaas",
+        provider_customer_id: knownCustomerId || null,
+        ...(recurring ? { provider_subscription_id: null } : {}),
+        provider_checkout_id: checkoutId,
+        provider_status: recurring ? "checkout_recurring_created" : "checkout_single_created",
+        cancel_at_period_end: false,
+        canceled_at: null,
+      },
+      { onConflict: "user_id" },
+    );
+  if (error) throw error;
+
+  const returnedCheckoutUrl =
+    created.data?.url ??
+    created.data?.checkoutUrl ??
+    created.data?.checkout_url ??
+    created.data?.paymentUrl ??
+    created.data?.payment_url;
+
+  return {
+    id: checkoutId,
+    checkout_url: asaasCheckoutUrl(checkoutId, returnedCheckoutUrl),
+    provider: "asaas" as const,
+  };
+}
 
 app.post(`${P}/billing/create-checkout`, async (c) => {
   try {
     const user = await getUser(c.req.header("Authorization"));
     if (!user) return unauthorized(c);
-
-    const response = await fetch(
-      "https://api.mercadopago.com/checkout/preferences",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${getMercadoPagoToken()}`,
-          "Content-Type": "application/json",
-          "X-Idempotency-Key": crypto.randomUUID(),
-        },
-        body: JSON.stringify({
-          items: [
-            {
-              id: "vortan-oficina-mensal",
-              title: "Assinatura Vortan Oficina - 1 mÃªs",
-              quantity: 1,
-              currency_id: "BRL",
-              unit_price: Number(
-                Deno.env.get("VORTAN_MONTHLY_PRICE") ?? "29.90",
-              ),
-            },
-          ],
-          external_reference: user.id,
-          metadata: {
-            product_code: "vortan_oficina_monthly",
-            user_id: user.id,
-          },
-          payer: { email: user.email },
-          back_urls: {
-            success: "https://www.vortanoficina.com.br",
-            failure: "https://www.vortanoficina.com.br",
-            pending: "https://www.vortanoficina.com.br",
-          },
-          auto_return: "approved",
-          notification_url:
-            "https://kddlzartfawqjnrafzdb.supabase.co/functions/v1/rapid-action/billing/webhook?source_news=webhooks",
-        }),
-      },
-    );
-
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      return c.json(
-        { error: "Erro ao criar pagamento" },
-        502,
-      );
-    }
-
-    return c.json({
-      id: data.id,
-      checkout_url: data.init_point,
-      init_point: data.init_point,
-      url: data.init_point,
-    });
+    return c.json(await createAsaasCheckout(user, "single"));
   } catch (error: any) {
+    console.error("Erro ao criar checkout Asaas:", error);
     return serverError(c, error?.message ?? "Erro ao criar pagamento");
   }
 });
@@ -1579,93 +1680,9 @@ app.post(`${P}/billing/create-subscription`, async (c) => {
   try {
     const user = await getUser(c.req.header("Authorization"));
     if (!user) return unauthorized(c);
-    if (!user.email) return badRequest(c, "UsuÃ¡rio sem e-mail vÃ¡lido");
-
-    const planId = Deno.env.get("MERCADOPAGO_PREAPPROVAL_PLAN_ID");
-    if (!planId)
-      return serverError(c, "ID do plano recorrente nÃ£o configurado");
-
-    const existing = await getSubscription(user.id);
-    if (existing?.preapproval_id) {
-      const existingPreapproval = await mercadoPagoGet(
-        `/preapproval/${encodeURIComponent(existing.preapproval_id)}`,
-      );
-      const existingData = existingPreapproval.data;
-      if (
-        existingPreapproval.response.ok &&
-        String(existingData?.external_reference ?? "") === user.id &&
-        existingData?.init_point &&
-        ["pending", "authorized", "paused"].includes(
-          String(existingData?.status ?? ""),
-        )
-      ) {
-        return c.json({
-          id: existingData.id,
-          init_point: existingData.init_point,
-          url: existingData.init_point,
-          reused: true,
-        });
-      }
-    }
-
-    const response = await fetch("https://api.mercadopago.com/preapproval", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${getMercadoPagoToken()}`,
-        "Content-Type": "application/json",
-        "X-Idempotency-Key": crypto.randomUUID(),
-      },
-      body: JSON.stringify({
-        preapproval_plan_id: planId,
-        reason: "Assinatura mensal Vortan Oficina",
-        external_reference: user.id,
-        payer_email: user.email,
-        back_url: "https://www.vortanoficina.com.br",
-        status: "pending",
-      }),
-    });
-
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      return c.json(
-        { error: "Erro ao criar assinatura recorrente" },
-        502,
-      );
-    }
-    if (!data?.id || !data?.init_point) {
-      return serverError(
-        c,
-        "Mercado Pago nÃ£o retornou a assinatura corretamente",
-      );
-    }
-
-    const keepCurrentAccess = isSubscriptionActive(existing);
-    const expiresAt = existing?.expires_at ?? new Date().toISOString();
-    const { error } = await svc()
-      .from("subscriptions")
-      .upsert(
-        {
-          user_id: user.id,
-          plan_name: "mensal",
-          status: keepCurrentAccess ? existing.status : "pending",
-          expires_at: expiresAt,
-          preapproval_id: String(data.id),
-          mercadopago_subscription_id: String(data.id),
-          provider_status: String(data.status ?? "pending"),
-          cancel_at_period_end: false,
-          canceled_at: null,
-        },
-        { onConflict: "user_id" },
-      );
-
-    if (error) return serverError(c, error);
-
-    return c.json({
-      id: data.id,
-      init_point: data.init_point,
-      url: data.init_point,
-    });
+    return c.json(await createAsaasCheckout(user, "subscription"));
   } catch (error: any) {
+    console.error("Erro ao criar assinatura Asaas:", error);
     return serverError(c, error?.message ?? "Erro ao criar assinatura");
   }
 });
@@ -1674,88 +1691,71 @@ app.post(`${P}/billing/webhook`, async (c) => {
   let claimedEventId: string | null = null;
 
   try {
-    const parsed = await readJsonObject(c, 256 * 1024);
-    if (parsed.response) return parsed.response;
-    const body = parsed.body;
-    const topic = String(
-      body?.type ?? c.req.query("type") ?? c.req.query("topic") ?? "payment",
-    );
-    const resourceId = String(
-      body?.data?.id ??
-        c.req.query("data.id") ??
-        c.req.query("data_id") ??
-        body?.id ??
-        c.req.query("id") ??
-        "",
-    );
-    const signatureDataId = String(
-      c.req.query("data.id") ?? c.req.query("data_id") ?? body?.data?.id ?? "",
-    );
-
-    if (!resourceId) return badRequest(c, "NotificaÃ§Ã£o sem ID");
-
-    const validSignature = await validateMercadoPagoWebhookSignature(
-      c,
-      signatureDataId,
-    );
-    if (!validSignature) {
-      return c.json(
-        { ok: false, error: "Assinatura do webhook invÃ¡lida" },
-        401,
-      );
+    const expectedToken = Deno.env.get("ASAAS_WEBHOOK_TOKEN") ?? "";
+    if (!expectedToken) throw new Error("ASAAS_WEBHOOK_TOKEN não configurado");
+    const receivedToken = c.req.header("asaas-access-token") ?? "";
+    if (receivedToken !== expectedToken) {
+      return c.json({ ok: false, error: "Webhook Asaas não autorizado" }, 401);
     }
 
-    const requestId = c.req.header("x-request-id") ?? "";
+    const body = await c.req.json().catch(() => ({}));
+    const event = String(body?.event ?? "").trim();
+    const resourceId = String(
+      body?.payment?.id ?? body?.subscription?.id ?? body?.checkout?.id ?? body?.id ?? "",
+    ).trim();
+    if (!event || !resourceId) return badRequest(c, "Webhook Asaas inválido");
+
     const claim = await claimWebhookEvent({
-      topic,
+      provider: "asaas",
+      topic: event,
       resourceId,
       notificationId: String(body?.id ?? ""),
-      action: String(body?.action ?? ""),
-      createdAt: String(body?.date_created ?? ""),
-      requestId,
+      action: event,
+      createdAt: String(body?.dateCreated ?? ""),
+      requestId: "",
       payload: body,
     });
     claimedEventId = claim.id;
+    if (claim.duplicate) return c.json({ ok: true, duplicate: true });
 
-    if (claim.duplicate) {
-      return c.json({ ok: true, duplicate: true });
-    }
+    let result: Record<string, unknown> = { ok: true, ignored: true, event };
 
-    let result: Record<string, unknown>;
-
-    if (topic === "subscription_preapproval") {
-      result = await processPreapproval(resourceId);
-    } else if (topic === "subscription_authorized_payment") {
-      const invoice = await mercadoPagoGet(
-        `/authorized_payments/${encodeURIComponent(resourceId)}`,
-      );
-      if (!invoice.response.ok) {
-        throw new Error(invoice.data?.message ?? "Fatura nÃ£o encontrada");
-      }
-      const linkedPaymentId = invoice.data?.payment?.id;
-      if (!linkedPaymentId || invoice.data?.payment?.status !== "approved") {
-        result = {
-          ok: true,
-          ignored: true,
-          status:
-            invoice.data?.payment?.status ?? invoice.data?.status ?? "unknown",
-        };
-      } else {
-        result = await processApprovedPayment(String(linkedPaymentId));
-      }
-    } else if (topic !== "payment" && topic !== "topic_payment") {
-      result = { ok: true, ignored: true, topic };
-    } else {
-      result = await processApprovedPayment(resourceId);
+    if (["PAYMENT_CONFIRMED", "PAYMENT_RECEIVED"].includes(event)) {
+      result = await processAsaasPayment(body?.payment, event);
+    } else if (
+      [
+        "PAYMENT_OVERDUE",
+        "PAYMENT_CREDIT_CARD_CAPTURE_REFUSED",
+        "PAYMENT_REFUNDED",
+        "PAYMENT_CHARGEBACK_REQUESTED",
+        "PAYMENT_CHARGEBACK_DISPUTE",
+      ].includes(event)
+    ) {
+      result = await processAsaasPaymentIssue(body?.payment, event);
+    } else if (
+      [
+        "SUBSCRIPTION_CREATED",
+        "SUBSCRIPTION_UPDATED",
+        "SUBSCRIPTION_INACTIVATED",
+        "SUBSCRIPTION_DELETED",
+      ].includes(event)
+    ) {
+      result = await processAsaasSubscription(body?.subscription, event);
+    } else if (
+      ["CHECKOUT_CREATED", "CHECKOUT_PAID", "CHECKOUT_CANCELED", "CHECKOUT_EXPIRED"].includes(
+        event,
+      )
+    ) {
+      result = await processAsaasCheckout(body?.checkout, event);
     }
 
     await finishWebhookEvent(claimedEventId);
     return c.json(result);
   } catch (error: any) {
-    const errorMessage = error?.message ?? "Erro ao processar notificaÃ§Ã£o";
+    const errorMessage = error?.message ?? "Erro ao processar webhook Asaas";
     if (claimedEventId) await failWebhookEvent(claimedEventId, errorMessage);
-    console.error("Erro no webhook do Mercado Pago:", error);
-    return c.json({ ok: false, error: "Erro ao processar notificaÃ§Ã£o" }, 500);
+    console.error("Erro no webhook Asaas:", error);
+    return c.json({ ok: false, error: errorMessage }, 500);
   }
 });
 
@@ -1765,43 +1765,75 @@ app.post(`${P}/billing/cancel-subscription`, async (c) => {
     if (!user) return unauthorized(c);
 
     const sub = await getSubscription(user.id);
-    if (!sub?.preapproval_id) {
-      return c.json({ error: "Assinatura recorrente nÃ£o encontrada." }, 404);
+    if (sub?.billing_provider === "asaas" && sub?.cancel_at_period_end === true) {
+      return c.json({
+        ok: true,
+        message: "Assinatura já cancelada. O acesso permanece até o fim do período pago.",
+        expires_at: sub?.expires_at ?? null,
+      });
     }
 
-    const response = await fetch(
-      `https://api.mercadopago.com/preapproval/${encodeURIComponent(sub.preapproval_id)}`,
-      {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${getMercadoPagoToken()}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ status: "cancelled" }),
-      },
-    );
+    let subscriptionId = String(sub?.provider_subscription_id ?? "").trim();
+    let customerId = String(sub?.provider_customer_id ?? "").trim();
+    let checkoutId = String(sub?.provider_checkout_id ?? "").trim();
 
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
+    const latestCheckout = await getLatestAsaasCheckoutSession(user.id, "subscription");
+    checkoutId = checkoutId || String(latestCheckout?.checkout_id ?? "").trim();
+    customerId = customerId || String(latestCheckout?.customer_id ?? "").trim();
+    subscriptionId = subscriptionId || String(latestCheckout?.subscription_id ?? "").trim();
+
+    if (checkoutId && (!customerId || !subscriptionId)) {
+      const payments = await listAsaasPaymentsForCheckout(checkoutId);
+      const payment = chooseAsaasCheckoutPayment(payments);
+      customerId = asaasResourceId(payment?.customer) || customerId;
+      subscriptionId = asaasResourceId(payment?.subscription) || subscriptionId;
+
+      if (payment) {
+        await upsertAsaasCheckoutSession({
+          checkoutId,
+          userId: user.id,
+          mode: "subscription",
+          status: "reconciled_for_cancel",
+          externalReference: latestCheckout?.external_reference ?? null,
+          customerId: customerId || null,
+          subscriptionId: subscriptionId || null,
+        });
+      }
+    }
+
+    if (!subscriptionId) {
+      return c.json({ error: "Assinatura recorrente não encontrada." }, 404);
+    }
+
+    const canceled = await asaasRequest(`/subscriptions/${encodeURIComponent(subscriptionId)}`, {
+      method: "DELETE",
+    });
+    if (!canceled.response.ok) {
       return c.json(
-        { error: "Erro ao cancelar assinatura no Mercado Pago." },
+        {
+          error:
+            canceled.data?.errors?.[0]?.description ??
+            canceled.data?.message ??
+            "Erro ao cancelar assinatura no Asaas.",
+        },
         502,
       );
     }
 
-    const expiresAt = sub.expires_at ? new Date(sub.expires_at) : new Date();
-    const safeExpiration = Number.isNaN(expiresAt.getTime())
-      ? new Date()
-      : expiresAt;
+    const expiresAt = sub?.expires_at ? new Date(sub.expires_at) : new Date();
+    const safeExpiration = Number.isNaN(expiresAt.getTime()) ? new Date() : expiresAt;
     const stillHasAccess =
       safeExpiration.getTime() > Date.now() &&
-      ["active", "trial"].includes(sub.status);
+      ["active", "trial"].includes(String(sub?.status ?? ""));
 
     if (stillHasAccess) {
       const { error } = await svc()
         .from("subscriptions")
         .update({
-          provider_status: "cancelled",
+          billing_provider: "asaas",
+          provider_customer_id: customerId || sub?.provider_customer_id || null,
+          provider_subscription_id: subscriptionId,
+          provider_status: "DELETED",
           cancel_at_period_end: true,
           canceled_at: new Date().toISOString(),
         })
@@ -1813,30 +1845,39 @@ app.post(`${P}/billing/cancel-subscription`, async (c) => {
         status: "canceled",
         expiresAt: safeExpiration,
         subscriptionPatch: {
-          provider_status: "cancelled",
+          billing_provider: "asaas",
+          provider_customer_id: customerId || sub?.provider_customer_id || null,
+          provider_subscription_id: subscriptionId,
+          provider_status: "DELETED",
           cancel_at_period_end: true,
           canceled_at: new Date().toISOString(),
         },
       });
     }
 
+    if (checkoutId) {
+      await upsertAsaasCheckoutSession({
+        checkoutId,
+        userId: user.id,
+        mode: "subscription",
+        status: "subscription_deleted",
+        externalReference: latestCheckout?.external_reference ?? null,
+        customerId: customerId || null,
+        subscriptionId,
+      });
+    }
+
     return c.json({
       ok: true,
       message: stillHasAccess
-        ? "Assinatura cancelada. VocÃª continuarÃ¡ com acesso atÃ© o fim do perÃ­odo pago."
+        ? "Assinatura cancelada. Você continuará com acesso até o fim do período pago."
         : "Assinatura cancelada.",
-      expires_at: sub.expires_at,
+      expires_at: sub?.expires_at ?? null,
     });
   } catch (error: any) {
-    console.error("Erro ao cancelar assinatura:", error);
-    return serverError(
-      c,
-      error?.message ?? "Erro interno ao cancelar assinatura",
-    );
+    console.error("Erro ao cancelar assinatura Asaas:", error);
+    return serverError(c, error?.message ?? "Erro interno ao cancelar assinatura");
   }
 });
 
 Deno.serve(app.fetch);
-
-
-

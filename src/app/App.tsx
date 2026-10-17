@@ -6499,41 +6499,15 @@ function SettingsPage({ profile }: { profile: Profile | null }) {
     if (!confirmCancel) return;
 
     try {
-      const session = (await supabase.auth.getSession()).data.session;
-
-      if (!session) {
-        alert("Sessão expirada. Faça login novamente.");
-        return;
-      }
-
-      const res = await fetch(
-        "https://kddlzartfawqjnrafzdb.supabase.co/functions/v1/rapid-action/billing/cancel-subscription",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-        },
-      );
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        if (res.status === 404) {
-          alert(
-            "Você não possui uma assinatura mensal recorrente para cancelar.",
-          );
-          return;
-        }
-
-        alert(data?.error || "Erro ao cancelar assinatura.");
-        return;
-      }
-
+      const data = await API.cancelSubscription();
       alert(data.message || "Assinatura cancelada com sucesso.");
-    } catch {
-      alert("Erro ao cancelar assinatura.");
+    } catch (error: any) {
+      const message = String(error?.message ?? "");
+      if (message.toLowerCase().includes("não encontrada")) {
+        alert("Você não possui uma assinatura mensal recorrente para cancelar.");
+        return;
+      }
+      alert(message || "Erro ao cancelar assinatura.");
     }
   }
 
@@ -7387,7 +7361,11 @@ export default function App() {
     [],
   );
   const [dataLoaded, setDataLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [checkingPayment, setCheckingPayment] = useState(false);
+  const [paymentRedirecting, setPaymentRedirecting] = useState<
+    "subscription" | "single" | null
+  >(null);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -7511,30 +7489,72 @@ export default function App() {
   useEffect(() => {
     if (!session) {
       setDataLoaded(false);
+      setLoadError(null);
       setProfile(null);
       setClients([]);
       setVehicles([]);
+      setOrders([]);
       setFinancialEntries([]);
 
       /*setNeedsOnboarding(false);*/
       return;
     }
 
-    async function init() {
-      const [prof, cls, vehs, ords, fins] = await Promise.allSettled([
-        API.getProfile(),
-        API.getClients(),
-        API.getVehicles(),
-        API.getOrders(),
-        API.getFinancialEntries(),
-      ]);
+    let cancelled = false;
 
-      let p = prof.status === "fulfilled" ? prof.value : null;
+    async function getProfileWithRetry(): Promise<Profile | null> {
+      let lastError: unknown = null;
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          return await API.getProfile();
+        } catch (error) {
+          lastError = error;
+
+          if (attempt < 2) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, 350 * (attempt + 1)),
+            );
+          }
+        }
+      }
+
+      throw lastError instanceof Error
+        ? lastError
+        : new Error("Não foi possível carregar o perfil.");
+    }
+
+    async function init() {
+      setDataLoaded(false);
+      setLoadError(null);
+
+      let p: Profile | null;
+
+      try {
+        p = await getProfileWithRetry();
+      } catch (error) {
+        console.error("Falha ao carregar perfil:", error);
+
+        if (!cancelled) {
+          setProfile(null);
+          setLoadError(
+            "Não foi possível carregar sua conta agora. Tente novamente.",
+          );
+          setDataLoaded(true);
+        }
+
+        return;
+      }
+
       const pendingProfileRaw = localStorage.getItem(
         "vortanoficina_pending_profile",
       );
 
-      let pendingProfile: { owner_name?: string; workshop_name?: string } | null = null;
+      let pendingProfile: {
+        owner_name?: string;
+        workshop_name?: string;
+      } | null = null;
+
       if (pendingProfileRaw) {
         try {
           pendingProfile = JSON.parse(pendingProfileRaw);
@@ -7545,9 +7565,7 @@ export default function App() {
 
       const metadata = session.user.user_metadata ?? {};
       const shouldInitializeTrial =
-        !p ||
-        Boolean(pendingProfile) ||
-        p.subscription_status === "pending";
+        !p || Boolean(pendingProfile) || p.subscription_status === "pending";
 
       if (shouldInitializeTrial) {
         try {
@@ -7572,21 +7590,41 @@ export default function App() {
           });
           localStorage.removeItem("vortanoficina_pending_profile");
         } catch (profileError) {
-          console.error("Não foi possível concluir o perfil inicial:", profileError);
+          console.error(
+            "Não foi possível concluir o perfil inicial:",
+            profileError,
+          );
         }
       }
 
       if (!p) {
-        console.warn("Perfil não encontrado ou falhou ao carregar.");
+        console.warn("Perfil não encontrado.");
 
-        setProfile(null);
-        setDataLoaded(true);
+        if (!cancelled) {
+          setProfile(null);
+          setLoadError(
+            "Não foi possível carregar seu perfil. Tente novamente.",
+          );
+          setDataLoaded(true);
+        }
 
-        // NÃO deslogar automaticamente aqui
         return;
-      } else {
-        setProfile(p);
       }
+
+      if (cancelled) return;
+
+      // O perfil é a fonte de verdade para acesso. Só depois dele carregar
+      // buscamos os demais dados, evitando tratar falha de rede como assinatura.
+      setProfile(p);
+
+      const [cls, vehs, ords, fins] = await Promise.allSettled([
+        API.getClients(),
+        API.getVehicles(),
+        API.getOrders(),
+        API.getFinancialEntries(),
+      ]);
+
+      if (cancelled) return;
 
       setClients(cls.status === "fulfilled" ? cls.value : []);
       setVehicles(vehs.status === "fulfilled" ? vehs.value : []);
@@ -7595,7 +7633,11 @@ export default function App() {
       setDataLoaded(true);
     }
 
-    init();
+    void init();
+
+    return () => {
+      cancelled = true;
+    };
   }, [session]);
 
   const loadClients = useCallback(async () => {
@@ -7829,6 +7871,30 @@ export default function App() {
 */
   if (!dataLoaded) return <LoadingScreen />;
 
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4">
+        <div className="w-full max-w-sm text-center">
+          <Logo />
+          <Card className="p-6 mt-6">
+            <AlertCircle size={28} className="text-destructive mx-auto mb-3" />
+            <h1 className="font-heading font-bold text-xl text-foreground mb-2">
+              Não foi possível carregar sua conta
+            </h1>
+            <p className="text-sm text-muted-foreground mb-5">{loadError}</p>
+            <Btn
+              variant="primary"
+              className="w-full justify-center"
+              onClick={() => window.location.reload()}
+            >
+              Tentar novamente
+            </Btn>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   if (!profile || !isPaid(profile)) {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4">
@@ -7845,143 +7911,46 @@ export default function App() {
               assinatura.
             </p>
 
-            {/* <Btn
-    variant="primary"
-    className="w-full justify-center"
-    onClick={async () => {
-      try {
-        const session = (await supabase.auth.getSession()).data.session;
-
-        if (!session) {
-          alert("Sessão expirada. Faça login novamente.");
-          return;
-        }
-
-        const res = await fetch(
-          "https://kddlzartfawqjnrafzdb.supabase.co/functions/v1/rapid-action/billing/create-checkout",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${session.access_token}`,
-            },
-          }
-        );
-
-        if (!res.ok) {
-          alert("Não foi possível gerar o pagamento agora.");
-          return;
-        }
-
-        const data = await res.json();
-        const checkoutUrl = data?.checkout_url || data?.init_point || data?.url;
-
-        if (checkoutUrl) {
-          window.open(checkoutUrl, "_blank", "noopener,noreferrer");
-        } else {
-          alert("Checkout não retornou link.");
-        }
-      } catch {
-        alert("Erro ao conectar com pagamento.");
-      }
-    }}
-  >
-    Assinar agora
-  </Btn> */}
-
             <Btn
               variant="primary"
               className="w-full justify-center"
+              loading={paymentRedirecting === "subscription"}
               onClick={async () => {
+                setPaymentRedirecting("subscription");
                 try {
-                  const session = (await supabase.auth.getSession()).data
-                    .session;
-
-                  if (!session) {
-                    alert("Sessão expirada. Faça login novamente.");
-                    return;
+                  const data = await API.createSubscriptionCheckout();
+                  if (!data.checkout_url) {
+                    throw new Error("O Asaas não retornou o link de pagamento.");
                   }
-
-                  const res = await fetch(
-                    "https://kddlzartfawqjnrafzdb.supabase.co/functions/v1/rapid-action/billing/create-subscription",
-                    {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${session.access_token}`,
-                      },
-                    },
-                  );
-
-                  const data = await res.json();
-
-                  if (!res.ok) {
-                    alert(
-                      data?.error || "Não foi possível criar a assinatura.",
-                    );
-                    return;
-                  }
-
-                  const url = data?.init_point || data?.url;
-
-                  if (!url) {
-                    alert("Mercado Pago não retornou o link da assinatura.");
-                    return;
-                  }
-
-                  window.open(url, "_blank", "noopener,noreferrer");
-                } catch {
-                  alert("Erro ao conectar com o Mercado Pago.");
+                  window.location.href = data.checkout_url;
+                } catch (error: any) {
+                  alert(error?.message || "Não foi possível abrir o pagamento recorrente.");
+                  setPaymentRedirecting(null);
                 }
               }}
             >
-              Assinar plano mensal
+              {paymentRedirecting !== "subscription" ? "Assinar plano mensal" : null}
             </Btn>
 
             <Btn
               variant="primary"
               className="w-full justify-center mt-3"
+              loading={paymentRedirecting === "single"}
               onClick={async () => {
+                setPaymentRedirecting("single");
                 try {
-                  const session = (await supabase.auth.getSession()).data
-                    .session;
-
-                  if (!session) {
-                    alert("Sessão expirada. Faça login novamente.");
-                    return;
+                  const data = await API.createCheckout();
+                  if (!data.checkout_url) {
+                    throw new Error("O Asaas não retornou o link de pagamento.");
                   }
-
-                  const res = await fetch(
-                    "https://kddlzartfawqjnrafzdb.supabase.co/functions/v1/rapid-action/billing/create-checkout",
-                    {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${session.access_token}`,
-                      },
-                    },
-                  );
-
-                  if (!res.ok) {
-                    alert("Não foi possível gerar o pagamento agora.");
-                    return;
-                  }
-
-                  const data = await res.json();
-                  const checkoutUrl =
-                    data?.checkout_url || data?.init_point || data?.url;
-
-                  if (checkoutUrl) {
-                    window.open(checkoutUrl, "_blank", "noopener,noreferrer");
-                  } else {
-                    alert("Checkout não retornou link.");
-                  }
-                } catch {
-                  alert("Erro ao conectar com pagamento.");
+                  window.location.href = data.checkout_url;
+                } catch (error: any) {
+                  alert(error?.message || "Não foi possível abrir o pagamento.");
+                  setPaymentRedirecting(null);
                 }
               }}
             >
-              Pagar apenas este mês
+              {paymentRedirecting !== "single" ? "Pagar apenas este mês" : null}
             </Btn>
 
             <Btn
@@ -8019,6 +7988,7 @@ export default function App() {
             </Btn>
           </Card>
         </div>
+
       </div>
     );
   }

@@ -78,7 +78,6 @@ export interface FinancialEntry {
   created_at: string;
 }
 
-
 // ─── Financial ───────────────────────────────────────────────────────────────
 
 export async function getFinancialEntries(): Promise<FinancialEntry[]> {
@@ -109,13 +108,13 @@ async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
- 
-
   if (!API_BASE) {
     throw new Error("API_BASE não configurada. Verifique VITE_API_BASE.");
   }
 
-  const { data: { session } } = await supabase.auth.getSession();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
   const token = session?.access_token;
 
   const res = await fetch(`${API_BASE}${path}`, {
@@ -126,29 +125,25 @@ async function apiFetch<T>(
       ...options.headers,
     },
   });
-let json: any = null;
+  let json: any = null;
 
-try {
-  json = await res.json();
-} catch {
-  json = null;
-}
+  try {
+    json = await res.json();
+  } catch {
+    json = null;
+  }
 
-if (!res.ok) {
-  throw new Error(json?.error ?? "Erro na requisição");
-}
+  if (!res.ok) {
+    throw new Error(json?.error ?? "Erro na requisição");
+  }
 
-return json as T;
+  return json as T;
 }
 
 // ─── Profile ─────────────────────────────────────────────────────────────────
 
 export async function getProfile(): Promise<Profile | null> {
-  try {
-    return await apiFetch<Profile>("/profile");
-  } catch {
-    return null;
-  }
+  return apiFetch<Profile | null>("/profile");
 }
 
 export async function upsertProfile(data: Partial<Profile>): Promise<Profile> {
@@ -171,12 +166,25 @@ export async function getClients(): Promise<Client[]> {
   return apiFetch<Client[]>("/clients");
 }
 
-export async function createClient_(data: { name: string; phone: string; whatsapp: string }): Promise<Client> {
-  return apiFetch<Client>("/clients", { method: "POST", body: JSON.stringify(data) });
+export async function createClient_(data: {
+  name: string;
+  phone: string;
+  whatsapp: string;
+}): Promise<Client> {
+  return apiFetch<Client>("/clients", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
 }
 
-export async function updateClient(id: string, data: { name: string; phone: string; whatsapp: string }): Promise<Client> {
-  return apiFetch<Client>(`/clients/${id}`, { method: "PUT", body: JSON.stringify(data) });
+export async function updateClient(
+  id: string,
+  data: { name: string; phone: string; whatsapp: string },
+): Promise<Client> {
+  return apiFetch<Client>(`/clients/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 }
 
 export async function deleteClient(id: string): Promise<void> {
@@ -189,12 +197,23 @@ export async function getVehicles(): Promise<Vehicle[]> {
   return apiFetch<Vehicle[]>("/vehicles");
 }
 
-export async function createVehicle(data: Omit<Vehicle, "id" | "workshop_id" | "created_at">): Promise<Vehicle> {
-  return apiFetch<Vehicle>("/vehicles", { method: "POST", body: JSON.stringify(data) });
+export async function createVehicle(
+  data: Omit<Vehicle, "id" | "workshop_id" | "created_at">,
+): Promise<Vehicle> {
+  return apiFetch<Vehicle>("/vehicles", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
 }
 
-export async function updateVehicle(id: string, data: Omit<Vehicle, "id" | "workshop_id" | "created_at">): Promise<Vehicle> {
-  return apiFetch<Vehicle>(`/vehicles/${id}`, { method: "PUT", body: JSON.stringify(data) });
+export async function updateVehicle(
+  id: string,
+  data: Omit<Vehicle, "id" | "workshop_id" | "created_at">,
+): Promise<Vehicle> {
+  return apiFetch<Vehicle>(`/vehicles/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 }
 
 export async function deleteVehicle(id: string): Promise<void> {
@@ -207,26 +226,53 @@ export async function getOrders(): Promise<ServiceOrder[]> {
   return apiFetch<ServiceOrder[]>("/orders");
 }
 
-export async function createOrder(data: Omit<ServiceOrder, "id" | "workshop_id" | "created_at" | "updated_at">): Promise<ServiceOrder> {
-
-
-
+export async function createOrder(
+  data: Omit<ServiceOrder, "id" | "workshop_id" | "created_at" | "updated_at">,
+): Promise<ServiceOrder> {
   return apiFetch<ServiceOrder>("/orders", {
     method: "POST",
     body: JSON.stringify(data),
   });
 }
 
-export async function updateOrder(id: string, data: Partial<ServiceOrder>): Promise<ServiceOrder> {
-  return apiFetch<ServiceOrder>(`/orders/${id}`, { method: "PUT", body: JSON.stringify(data) });
+export async function updateOrder(
+  id: string,
+  data: Partial<ServiceOrder>,
+): Promise<ServiceOrder> {
+  return apiFetch<ServiceOrder>(`/orders/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 }
 
 export async function deleteOrder(id: string): Promise<void> {
   await apiFetch<{ ok: boolean }>(`/orders/${id}`, { method: "DELETE" });
 }
 
-export async function createCheckout(): Promise<{ checkout_url: string }> {
-  return apiFetch<{ checkout_url: string }>("/billing/create-checkout", {
+export interface BillingCheckoutResponse {
+  id: string;
+  checkout_url: string;
+  provider: "asaas";
+}
+
+export async function createCheckout(): Promise<BillingCheckoutResponse> {
+  return apiFetch<BillingCheckoutResponse>("/billing/create-checkout", {
+    method: "POST",
+  });
+}
+
+export async function createSubscriptionCheckout(): Promise<BillingCheckoutResponse> {
+  return apiFetch<BillingCheckoutResponse>("/billing/create-subscription", {
+    method: "POST",
+  });
+}
+
+export async function cancelSubscription(): Promise<{
+  ok: boolean;
+  message: string;
+  expires_at?: string | null;
+}> {
+  return apiFetch("/billing/cancel-subscription", {
     method: "POST",
   });
 }
