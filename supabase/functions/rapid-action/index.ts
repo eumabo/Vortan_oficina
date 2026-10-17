@@ -1301,7 +1301,12 @@ async function getPixCustomerForUser(user: any, cpfCnpj?: string) {
     notificationDisabled: true,
   };
   if (user.email) payload.email = String(user.email).slice(0, 160);
-  if (mobilePhone.length >= 10) payload.mobilePhone = mobilePhone;
+  if (mobilePhone.length >= 10) {
+    // O Checkout hospedado do Asaas exige `phone` quando reutilizamos um customer.
+    // Salvamos também mobilePhone para manter o contato compatível com Pix/checkout.
+    payload.phone = mobilePhone;
+    payload.mobilePhone = mobilePhone;
+  }
 
   const created = await asaasRequest("/customers", {
     method: "POST",
@@ -1993,7 +1998,14 @@ async function createAsaasCheckout(user: any, mode: "single" | "subscription") {
   let knownCustomerId = "";
   if (candidateCustomerId) {
     const customer = await getAsaasCustomer(candidateCustomerId);
-    if (customer?.id) knownCustomerId = candidateCustomerId;
+    // O Asaas rejeita /checkouts quando `customer` é informado sem `phone`.
+    // Clientes criados pelo fluxo Pix antigo podiam ter apenas mobilePhone.
+    // Nesse caso não reutilizamos o customer no Checkout: o próprio Checkout
+    // coleta os dados necessários e continua funcionando normalmente.
+    const checkoutPhone = onlyDigits(customer?.phone);
+    if (customer?.id && checkoutPhone.length >= 10) {
+      knownCustomerId = candidateCustomerId;
+    }
   }
 
   const payload: Record<string, unknown> = {
