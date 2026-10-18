@@ -666,12 +666,12 @@ function LandingPage({
     "https://wa.me/5527996126147?text=Olá,%20tenho%20interesse%20na%20Vortan%20Oficina%20e%20gostaria%20de%20falar%20com%20um%20consultor.";
 
   const features = [
-    ["Ordens de Serviço", "Crie, acompanhe e envie OS profissionais."],
-    ["Financeiro", "Controle faturamento, despesas e lucro."],
-    ["Clientes e veículos", "Histórico completo sempre à mão."],
-    ["WhatsApp e PDF", "Compartilhe atualizações com poucos cliques."],
-    ["Link público", "Seu cliente acompanha o andamento online."],
-    ["Sistema online", "Acesse pelo computador, tablet ou celular."],
+    ["Ordens de serviço online", "Crie, organize e acompanhe ordens de serviço da sua oficina."],
+    ["Orçamentos e PDF", "Prepare orçamentos de peças e serviços e gere documentos profissionais."],
+    ["Clientes e veículos", "Mantenha cadastros, placas e históricos de atendimento organizados."],
+    ["Controle financeiro", "Registre receitas, despesas e acompanhe o financeiro da oficina."],
+    ["Acompanhamento de OS", "Compartilhe um link para o cliente consultar o andamento do serviço."],
+    ["Sistema online", "Acesse a Vortan pelo computador, tablet ou celular."],
   ];
 
   const stats = [
@@ -687,7 +687,7 @@ function LandingPage({
     },
     {
       title: "Veículos",
-      text: "Consulte placas, modelos e serviços anteriores",
+      text: "Cadastre placas, modelos e serviços anteriores",
       icon: Car,
     },
     {
@@ -778,21 +778,22 @@ backdrop-blur-[1px]
           <div className="relative z-10 max-w-7xl mx-auto px-5 min-h-[calc(100vh-96px)] flex items-center py-10 lg:py-16">
             <div className="max-w-2xl">
               <div className="text-primary font-bold uppercase tracking-[0.18em] text-sm md:text-base">
-                Sistema para oficinas
+                Software online para oficinas mecânicas
               </div>
 
-              <h1 className="mt-6 font-heading text-5xl md:text-7xl font-bold leading-[0.95] tracking-tight drop-shadow-2xl">
-                Gestão completa para sua oficina
+              <h1 className="mt-6 font-heading text-4xl sm:text-5xl lg:text-7xl font-bold leading-[1.05] tracking-tight drop-shadow-2xl">
+                Sistema de gestão para oficinas mecânicas
               </h1>
 
               <p className="mt-6 text-lg md:text-xl leading-relaxed text-white/74 max-w-xl">
-                Organize ordens de serviço, controle financeiro, estoque,
-                clientes e veículos em um só lugar. Mais eficiência, mais lucro.
+                Com a Vortan Oficina, você organiza ordens de serviço, orçamentos,
+                clientes, veículos e controle financeiro em um único sistema online.
+                Menos planilhas, mais tempo para atender.
               </p>
 
               <div className="mt-9 flex flex-col sm:flex-row gap-4">
                 <Btn variant="primary" size="lg" onClick={onGoRegister}>
-                  Conhecer o sistema
+                  Criar minha conta
                   <ChevronRight size={18} />
                 </Btn>
                 <a
@@ -802,18 +803,18 @@ backdrop-blur-[1px]
                   className="inline-flex items-center justify-center gap-3 rounded-lg border border-white/20 bg-black/45 px-6 py-3 text-sm font-bold text-white hover:bg-white/10 transition-colors backdrop-blur"
                 >
                   <MessageCircle size={18} className="text-primary" />
-                  Falar com um consultor
+                  Tirar dúvidas pelo WhatsApp
                 </a>
               </div>
 
               <div className="mt-10 grid sm:grid-cols-3 gap-3 max-w-2xl">
                 {[
-                  [Gauge, "Mais controle", "Tudo da oficina na palma da mão."],
-                  [Clock, "Mais agilidade", "Processos rápidos e integrados."],
+                  [Gauge, "Mais controle", "Ordens de serviço e cadastros organizados."],
+                  [Clock, "Mais agilidade", "Informações importantes sempre à mão."],
                   [
                     TrendingUp,
-                    "Mais lucro",
-                    "Decisões inteligentes e resultados reais.",
+                    "Visão financeira",
+                    "Acompanhe entradas e saídas da sua oficina.",
                   ],
                 ].map(([Icon, title, desc]) => {
                   const IconCmp = Icon as typeof Gauge;
@@ -867,11 +868,11 @@ backdrop-blur-[1px]
                 Plano Fundadores
               </div>
               <h2 className="mt-3 text-4xl md:text-5xl font-bold">
-                Comece com preço promocional.
+                Organize sua oficina por um valor acessível.
               </h2>
               <p className="mt-4 text-muted-foreground max-w-2xl">
-                Valor especial para os primeiros clientes da Vortan Oficina, com
-                acesso aos recursos principais para organizar sua operação.
+                O Plano Fundadores reúne os recursos essenciais de gestão para
+                oficinas mecânicas, do cadastro de veículos às ordens de serviço.
               </p>
 
               <div className="mt-7 flex items-end gap-2">
@@ -896,6 +897,16 @@ backdrop-blur-[1px]
                     {item}
                   </div>
                 ))}
+              </div>
+
+              <div className="mt-8">
+                <Btn variant="primary" size="lg" className="w-full justify-center" onClick={onGoRegister}>
+                  Criar conta na Vortan
+                  <ChevronRight size={18} />
+                </Btn>
+                <p className="mt-3 text-center text-xs text-muted-foreground">
+                  Cadastre sua oficina e conheça os recursos do sistema.
+                </p>
               </div>
             </Card>
 
@@ -929,15 +940,17 @@ backdrop-blur-[1px]
               Veja a Vortan Oficina em ação
             </h2>
             <p className="text-muted-foreground mt-2">
-              Dashboard real do sistema, com visual profissional para a rotina
-              da oficina.
+              Conheça o painel de gestão da Vortan, com ordens de serviço,
+              informações de clientes e indicadores da sua oficina.
             </p>
           </div>
 
           <Card className="overflow-hidden border-primary/20 max-w-6xl mx-auto bg-black/70 shadow-2xl shadow-red-950/20">
             <img
               src="/dashboard-real.png?v=1"
-              alt="Dashboard Vortan Oficina"
+              alt="Painel do sistema Vortan Oficina com ordens de serviço e indicadores da oficina"
+              loading="lazy"
+              decoding="async"
               className="w-full object-cover"
             />
           </Card>
@@ -946,10 +959,11 @@ backdrop-blur-[1px]
         <section id="funcionalidades" className="max-w-7xl mx-auto px-5 py-14">
           <div className="text-center mb-9">
             <h2 className="font-heading font-bold text-4xl">
-              Recursos que simplificam o dia a dia
+              Recursos para gerenciar sua oficina mecânica
             </h2>
             <p className="text-muted-foreground mt-2">
-              Menos bagunça, menos papel e mais controle dentro da oficina.
+              Controle de ordens de serviço, orçamentos, veículos, clientes e
+              financeiro — tudo pensado para a rotina da oficina.
             </p>
           </div>
 
@@ -960,8 +974,34 @@ backdrop-blur-[1px]
                 className="p-5 bg-black/45 border-white/10 hover:border-primary/35 transition-colors"
               >
                 <CheckCircle size={20} className="text-primary mb-4" />
-                <p className="font-bold">{title}</p>
+                <h3 className="font-bold">{title}</h3>
                 <p className="text-sm text-muted-foreground mt-2">{desc}</p>
+              </Card>
+            ))}
+          </div>
+        </section>
+
+        <section id="como-funciona" className="max-w-7xl mx-auto px-5 py-14">
+          <div className="text-center mb-9">
+            <h2 className="font-heading font-bold text-3xl md:text-4xl">
+              Como funciona o sistema para oficinas da Vortan?
+            </h2>
+            <p className="mt-3 text-muted-foreground max-w-2xl mx-auto">
+              Da entrada do veículo ao acompanhamento do serviço, organize a
+              rotina da oficina em três etapas simples.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-4">
+            {[
+              ["01", "Cadastre clientes e veículos", "Registre os dados do cliente e do veículo para manter o histórico de atendimentos acessível."],
+              ["02", "Crie orçamentos e ordens de serviço", "Organize o que precisa ser feito, os valores e o andamento da manutenção."],
+              ["03", "Acompanhe serviços e financeiro", "Consulte movimentações e compartilhe com o cliente o link de acompanhamento da OS."],
+            ].map(([number, title, description]) => (
+              <Card key={number} className="p-6 bg-black/45 border-white/10 hover:translate-y-0">
+                <span className="text-primary text-xs font-bold tracking-[0.18em]">PASSO {number}</span>
+                <h3 className="mt-3 font-bold text-xl">{title}</h3>
+                <p className="mt-3 text-sm text-muted-foreground leading-relaxed">{description}</p>
               </Card>
             ))}
           </div>
@@ -970,15 +1010,15 @@ backdrop-blur-[1px]
         <section className="max-w-5xl mx-auto px-5 py-16">
           <Card className="text-center p-8 md:p-12 border-primary/20 bg-[radial-gradient(circle_at_center,rgba(239,31,47,0.15),transparent_55%),rgba(0,0,0,0.58)]">
             <h2 className="text-4xl md:text-5xl font-bold">
-              Pronto para organizar sua oficina?
+              Pronto para simplificar a gestão da sua oficina?
             </h2>
             <p className="text-muted-foreground mt-4 max-w-2xl mx-auto">
-              Comece hoje mesmo a controlar clientes, veículos, ordens de
-              serviço e financeiro em um único lugar.
+              Troque as anotações espalhadas por uma rotina organizada.
+              Cadastre sua oficina na Vortan e gerencie tudo em um só lugar.
             </p>
             <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
               <Btn variant="primary" size="lg" onClick={onGoRegister}>
-                Começar Agora
+                Criar minha conta
               </Btn>
               <Btn variant="secondary" size="lg" onClick={onGoLogin}>
                 Já tenho conta
@@ -993,32 +1033,48 @@ backdrop-blur-[1px]
               Perguntas frequentes
             </h2>
             <p className="text-muted-foreground mt-2">
-              Tudo que você precisa saber antes de começar.
+              Respostas rápidas sobre o software de gestão Vortan Oficina.
             </p>
           </div>
 
           <div className="grid md:grid-cols-2 gap-4">
             {[
               [
-                "Precisa instalar?",
-                "Não. A Vortan Oficina funciona direto pelo navegador, sem instalação.",
+                "O que é a Vortan Oficina?",
+                "A Vortan é um sistema online de gestão para oficinas mecânicas. Não é uma oficina física de reparos.",
               ],
               [
-                "Funciona no celular?",
-                "Sim. Você pode acessar pelo computador, tablet ou celular.",
+                "Como emitir uma ordem de serviço online?",
+                "Cadastre o cliente e o veículo, registre o serviço e acompanhe a OS pelo painel da Vortan.",
               ],
               [
-                "Os dados ficam salvos?",
-                "Sim. As informações ficam armazenadas online com segurança.",
+                "Posso gerar orçamentos e documentos em PDF?",
+                "Sim. A Vortan permite criar orçamentos e gerar documentos para compartilhar com seus clientes.",
               ],
               [
-                "Tem suporte?",
-                "Sim. Clientes do plano fundador contam com suporte dedicado.",
+                "O cliente consegue acompanhar a manutenção?",
+                "Sim. Compartilhe o link público da ordem de serviço para o cliente consultar o andamento online.",
+              ],
+              [
+                "Precisa instalar algum programa?",
+                "Não. A Vortan Oficina funciona pelo navegador, sem exigir instalação no computador.",
+              ],
+              [
+                "O sistema funciona no celular?",
+                "Sim. Você pode acessar a Vortan pelo computador, tablet ou celular.",
+              ],
+              [
+                "Os dados da oficina ficam salvos?",
+                "Sim. Os cadastros e registros são armazenados online para consulta na sua conta.",
+              ],
+              [
+                "A Vortan oferece suporte?",
+                "Sim. O Plano Fundadores inclui suporte inicial para ajudar você a começar.",
               ],
             ].map(([title, desc]) => (
               <Card key={title} className="p-5 bg-black/45 border-white/10">
                 <CheckCircle size={18} className="text-primary mb-3" />
-                <p className="font-bold">{title}</p>
+                <h3 className="font-bold">{title}</h3>
                 <p className="text-sm text-muted-foreground mt-2">{desc}</p>
               </Card>
             ))}
@@ -1030,7 +1086,7 @@ backdrop-blur-[1px]
         <div className="max-w-7xl mx-auto px-5 flex flex-col md:flex-row items-center justify-between gap-5 text-sm text-muted-foreground">
           <div className="text-center md:text-left">
             <div className="font-bold text-foreground">Vortan Oficina</div>
-            <div>Gestão completa para oficinas modernas.</div>
+            <div>Software online de gestão para oficinas mecânicas.</div>
           </div>
 
           <div className="text-center">
