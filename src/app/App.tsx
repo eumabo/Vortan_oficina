@@ -8975,6 +8975,14 @@ function PrivacyPage({ onBack }: { onBack: () => void }) {
       title: "6. Solicitações e contato",
       body: "O usuário pode entrar em contato com a equipe Vortan Oficina para solicitar informações, correções ou orientações relacionadas aos seus dados e uso da plataforma.",
     },
+    {
+      title: "7. Cookies de análise e Google Analytics",
+      body: "Com a sua autorização, utilizamos o Google Analytics 4, serviço da Google LLC, para compreender visitas e melhorar o site e a plataforma. O serviço pode utilizar cookies e coletar informações de navegação, como páginas visitadas, interações, navegador, dispositivo e origem aproximada do acesso. A análise é opcional e não é necessária para usar a Vortan. Não enviamos intencionalmente nomes, e-mails, dados de clientes, veículos ou pagamentos ao Analytics. O processamento pelo Google pode envolver infraestrutura fora do Brasil. Saiba mais em https://policies.google.com/privacy.",
+    },
+    {
+      title: "8. Sua escolha sobre cookies analíticos",
+      body: "O Google Analytics fica desativado por padrão e só é ativado após você selecionar Aceitar no aviso de cookies. Você pode selecionar Recusar sem perder o acesso às funcionalidades da Vortan. Também pode alterar a decisão a qualquer momento pelo botão Cookies do site. Ao retirar o consentimento, a Vortan impede novas coletas pelo Analytics e procura remover os cookies de análise do navegador. A preferência é armazenada localmente no dispositivo para os próximos acessos.",
+    },
   ];
 
   return (
@@ -9012,11 +9020,12 @@ function PrivacyPage({ onBack }: { onBack: () => void }) {
                   Esta Política explica como a Vortan Oficina coleta, utiliza,
                   armazena e protege as informações necessárias para o
                   funcionamento da plataforma.
+                  Também esclarece o uso opcional de cookies de análise.
                 </p>
 
                 <div className="mt-6 flex flex-wrap gap-3 text-xs text-muted-foreground">
                   <span className="px-3 py-1.5 rounded-full border border-border bg-secondary/30">
-                    Última atualização: 20/06/2026
+                    Última atualização: 18/10/2026
                   </span>
 
                   <span className="px-3 py-1.5 rounded-full border border-border bg-secondary/30">
@@ -9078,7 +9087,7 @@ function PrivacyPage({ onBack }: { onBack: () => void }) {
               <div className="space-y-3">
                 {[
                   "Não vendemos dados dos usuários",
-                  "Coletamos apenas o necessário",
+                  "Analytics apenas com sua autorização",
                   "Dados usados para operar o sistema",
                   "Usuário controla os dados cadastrados",
                 ].map((item) => (

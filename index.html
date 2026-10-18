@@ -52,10 +52,190 @@
         height: 100%;
       }
     </style>
+    <!-- Vortan Analytics: consentimento negado por padrão (Google Consent Mode v2). -->
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag() { window.dataLayer.push(arguments); }
+      gtag("consent", "default", {
+        analytics_storage: "denied",
+        ad_storage: "denied",
+        ad_user_data: "denied",
+        ad_personalization: "denied"
+      });
+    </script>
+    <style>
+      #vortan-analytics-consent[hidden],
+      #vortan-cookie-settings[hidden] { display: none !important; }
+      #vortan-analytics-consent {
+        position: fixed;
+        z-index: 70;
+        right: 14px;
+        bottom: 14px;
+        left: 14px;
+        max-width: 780px;
+        margin: 0 auto;
+        border: 1px solid rgba(255,255,255,.16);
+        border-radius: 14px;
+        background: #101216;
+        color: #fff;
+        box-shadow: 0 12px 44px rgba(0,0,0,.55);
+        padding: 18px;
+        font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      #vortan-analytics-consent .vortan-consent-content {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+      }
+      #vortan-analytics-consent .vortan-consent-text { flex: 1 1 290px; }
+      #vortan-analytics-consent strong { display: block; font-size: 15px; margin-bottom: 4px; }
+      #vortan-analytics-consent p { margin: 0; color: #c5c8d0; font-size: 13px; }
+      #vortan-analytics-consent .vortan-consent-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+      #vortan-analytics-consent button,
+      #vortan-cookie-settings {
+        cursor: pointer;
+        border-radius: 8px;
+        font: 600 13px/1.3 system-ui, sans-serif;
+        padding: 10px 14px;
+      }
+      #vortan-consent-reject { color: #fff; background: #23252b; border: 1px solid #494b51; }
+      #vortan-consent-accept { color: #fff; background: #db2535; border: 1px solid #db2535; }
+      #vortan-analytics-consent button:focus-visible,
+      #vortan-cookie-settings:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+      #vortan-cookie-settings {
+        position: fixed;
+        z-index: 30;
+        left: 12px;
+        bottom: 12px;
+        padding: 6px 10px;
+        font-size: 11px;
+        color: #d6d7dc;
+        background: #101216;
+        border: 1px solid #464851;
+        opacity: .78;
+      }
+      @media (max-width: 480px) {
+        #vortan-analytics-consent { padding: 14px; }
+        #vortan-analytics-consent .vortan-consent-actions { width: 100%; }
+        #vortan-analytics-consent .vortan-consent-actions button { flex: 1; }
+      }
+    </style>
   </head>
 
   <body>
     <div id="root"></div>
+    <!-- Aviso próprio de cookies: o Analytics NÃO é carregado até o aceite. -->
+    <div id="vortan-analytics-consent" role="region" aria-label="Preferências de cookies" hidden>
+      <div class="vortan-consent-content">
+        <div class="vortan-consent-text">
+          <strong>Privacidade na Vortan</strong>
+          <p>Usamos cookies de análise para entender as visitas e melhorar nosso site. O Google Analytics só será ativado se você aceitar.</p>
+        </div>
+        <div class="vortan-consent-actions">
+          <button type="button" id="vortan-consent-reject">Recusar</button>
+          <button type="button" id="vortan-consent-accept">Aceitar</button>
+        </div>
+      </div>
+    </div>
+    <button type="button" id="vortan-cookie-settings" aria-label="Alterar a escolha de cookies de análise" hidden>Cookies</button>
+    <script>
+      (function () {
+        var MEASUREMENT_ID = "G-1N3XT4D4HQ";
+        var STORAGE_KEY = "vortan_analytics_consent_v1";
+        var banner = document.getElementById("vortan-analytics-consent");
+        var settings = document.getElementById("vortan-cookie-settings");
+        var acceptButton = document.getElementById("vortan-consent-accept");
+        var rejectButton = document.getElementById("vortan-consent-reject");
+        var existingChoice = null;
+
+        try { existingChoice = localStorage.getItem(STORAGE_KEY); } catch (e) { /* armazenamento indisponível */ }
+
+        function saveChoice(choice) {
+          try { localStorage.setItem(STORAGE_KEY, choice); } catch (e) { /* nova escolha no próximo acesso */ }
+        }
+
+        function activateAnalytics() {
+          if (document.querySelector('script[data-vortan-analytics="true"]')) return;
+          window["ga-disable-" + MEASUREMENT_ID] = false;
+          gtag("consent", "update", {
+            analytics_storage: "granted",
+            ad_storage: "denied",
+            ad_user_data: "denied",
+            ad_personalization: "denied"
+          });
+          gtag("js", new Date());
+          // Sem query/hash para não enviar tokens de login ou parâmetros pessoais.
+          gtag("config", MEASUREMENT_ID, {
+            page_location: window.location.origin + window.location.pathname,
+            allow_google_signals: false,
+            allow_ad_personalization_signals: false
+          });
+          var tag = document.createElement("script");
+          tag.async = true;
+          tag.src = "https://www.googletagmanager.com/gtag/js?id=" + MEASUREMENT_ID;
+          tag.setAttribute("data-vortan-analytics", "true");
+          document.head.appendChild(tag);
+        }
+
+        function removeAnalyticsCookies() {
+          document.cookie.split(";").forEach(function (entry) {
+            var name = entry.split("=")[0].trim();
+            if (!/^(_ga($|_)|_gid$|_gat($|_))/.test(name)) return;
+            var base = name + "=; Max-Age=0; Path=/; SameSite=Lax";
+            document.cookie = base;
+            if (location.hostname.endsWith("vortanoficina.com.br")) {
+              document.cookie = base + "; Domain=.vortanoficina.com.br";
+            }
+          });
+        }
+
+        function choose(choice) {
+          saveChoice(choice);
+          banner.hidden = true;
+          settings.hidden = false;
+          if (choice === "accepted") {
+            activateAnalytics();
+          } else {
+            // Ao revogar o aceite, bloqueia novas coletas e encerra a tag já carregada.
+            window["ga-disable-" + MEASUREMENT_ID] = true;
+            gtag("consent", "update", {
+              analytics_storage: "denied",
+              ad_storage: "denied",
+              ad_user_data: "denied",
+              ad_personalization: "denied"
+            });
+            removeAnalyticsCookies();
+            if (document.querySelector('script[data-vortan-analytics="true"]')) {
+              window.location.reload();
+            }
+          }
+        }
+
+        acceptButton.addEventListener("click", function () { choose("accepted"); });
+        rejectButton.addEventListener("click", function () { choose("rejected"); });
+        settings.addEventListener("click", function () {
+          banner.hidden = false;
+          settings.hidden = true;
+          acceptButton.focus();
+        });
+
+        if (existingChoice === "accepted") {
+          banner.hidden = true;
+          settings.hidden = false;
+          activateAnalytics();
+        } else if (existingChoice === "rejected") {
+          banner.hidden = true;
+          settings.hidden = false;
+          window["ga-disable-" + MEASUREMENT_ID] = true;
+        } else {
+          banner.hidden = false;
+          settings.hidden = true;
+        }
+      })();
+    </script>
+
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
